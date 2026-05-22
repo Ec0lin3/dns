@@ -190,7 +190,10 @@ def check_liquidity(df, strength, lookback, condition, recency=5):
 # Gaps
 # --------------------------------------------------------------------------
 def find_gaps(df, direction, min_gap_pct):
-    """All gaps in `df` matching the direction. idx is positional within df."""
+    """All gaps in `df` matching the direction. idx is positional within df.
+
+    Each gap carries the zone it left untraded: prev_close .. gap-day open.
+    """
     opens = df["Open"].values
     closes = df["Close"].values
     gaps = []
@@ -202,7 +205,8 @@ def find_gaps(df, direction, min_gap_pct):
         if (direction == "up" and gap_pct >= min_gap_pct) or \
            (direction == "down" and gap_pct <= -min_gap_pct):
             gaps.append({"idx": i, "gap_pct": gap_pct,
-                         "prev_close": float(prev_close)})
+                         "prev_close": float(prev_close),
+                         "open": float(opens[i])})
     return gaps
 
 
@@ -219,11 +223,17 @@ def check_gap(df, direction, min_gap_pct, condition, lookback):
 
     last = gaps[-1]
     i, gap_pct, prev_close = last["idx"], last["gap_pct"], last["prev_close"]
+    zone_lo, zone_hi = sorted([prev_close, last["open"]])
     if direction == "up":
         filled = bool(lows[i:].min() <= prev_close)
     else:
         filled = bool(highs[i:].max() >= prev_close)
 
+    if condition == "price_inside":
+        price = float(sub["Close"].iloc[-1])
+        ok = zone_lo <= price <= zone_hi
+        where = "inside" if ok else "outside"
+        return ok, f"{direction} gap zone {zone_lo:.2f}-{zone_hi:.2f}, price {where}"
     if condition == "any":
         ok = True
     elif condition == "filled":

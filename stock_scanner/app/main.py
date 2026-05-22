@@ -10,7 +10,7 @@ from .analysis import build_chart
 from .config import load_config, save_config
 from .data import clear_cache
 from .notifier import send_telegram
-from .scanner import STATE, start_scan
+from .scanner import STATE, analyze_ticker, start_scan
 from .scheduler import init_scheduler, reschedule, shutdown_scheduler
 
 BASE_DIR = os.path.dirname(__file__)
@@ -63,6 +63,32 @@ def get_chart(ticker: str, timeframe: str | None = None):
     if timeframe:
         config.setdefault("chart", {})["timeframe"] = timeframe
     return build_chart(config, ticker.upper())
+
+
+@app.post("/api/test")
+async def post_test(request: Request):
+    """Single-stock test: evaluate + chart for the selected criteria only."""
+    body = await request.json()
+    ticker = (body.get("ticker") or "").strip().upper()
+    if not ticker:
+        return {"error": "missing ticker"}
+    timeframe = body.get("timeframe", "1d")
+    selected = set(body.get("criteria", []))
+
+    config = load_config()
+    config.setdefault("chart", {})["timeframe"] = timeframe
+    for name, ccfg in config.get("criteria", {}).items():
+        if name in selected:
+            if ccfg.get("mode", "off") == "off":
+                ccfg["mode"] = "bonus"
+        else:
+            ccfg["mode"] = "off"
+
+    return {
+        "ticker": ticker,
+        "evaluation": analyze_ticker(config, ticker),
+        "chart": build_chart(config, ticker),
+    }
 
 
 @app.post("/api/cache/clear")

@@ -225,6 +225,13 @@ def evaluate_ticker(config, data, ticker):
     }
 
 
+def analyze_ticker(config, ticker):
+    """Evaluate a single ticker against the config (used by the test page)."""
+    timeframes = collect_timeframes(config)
+    data = {tf: get_data([ticker], tf) for tf in timeframes}
+    return evaluate_ticker(config, data, ticker)
+
+
 # --------------------------------------------------------------------------
 # Scan runner
 # --------------------------------------------------------------------------

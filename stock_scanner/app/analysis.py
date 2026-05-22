@@ -16,6 +16,8 @@ RED = "#ef4444"
 BLUE = "#3b82f6"
 AMBER = "#f59e0b"
 TRENDLINE = "#facc15"
+GAP_FILL = "rgba(236,72,153,0.22)"
+GAP_LINE = "#ec4899"
 INTRADAY = ("15m", "30m", "60m", "1h")
 
 
@@ -151,22 +153,20 @@ def build_chart(config, ticker):
         ]
         legend(BLUE, "Equilibrium 50%", "אמצע הטווח (נמוך-נמוך עד גבוה-גבוה)")
 
-    # --- gaps ------------------------------------------------------------
+    # --- gaps (drawn as shaded price zones, separate from FVG) ----------
     gap_cfg = crit.get("gaps", {})
     if gap_cfg.get("mode", "off") != "off":
         direction = gap_cfg.get("direction", "up")
         gaps = ind.find_gaps(df, direction, float(gap_cfg.get("min_gap_pct", 1.0)))
-        for g in gaps[-8:]:
-            i = g["idx"]
-            out["markers"].append({
-                "time": times[i],
-                "position": "belowBar" if direction == "up" else "aboveBar",
-                "color": AMBER,
-                "shape": "arrowUp" if direction == "up" else "arrowDown",
-                "text": f"פער {g['gap_pct']:+.1f}%",
+        for g in gaps[-6:]:
+            lo, hi = sorted([g["prev_close"], g["open"]])
+            out["boxes"].append({
+                "time1": times[g["idx"]], "time2": last_time,
+                "price1": round(lo, 4), "price2": round(hi, 4),
+                "color": GAP_FILL, "label": f"פער {g['gap_pct']:+.1f}%",
             })
         if gaps:
-            legend(AMBER, "פער (Gap)", "פער מחיר בין נר לנר")
+            legend(GAP_LINE, "פער (Gap)", "אזור הגאפ — לתפוס את הכניסה אליו")
 
     # --- support / resistance -------------------------------------------
     sr_cfg = crit.get("support_resistance", {})

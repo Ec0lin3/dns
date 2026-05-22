@@ -9,7 +9,11 @@
 <body>
   <header>
     <h1>🤖 Stock Scanner Bot</h1>
-    <div class="actions">
+    <div class="tabs">
+      <button id="tab-dashboard" class="tab active">⚙ ניהול</button>
+      <button id="tab-test" class="tab">🧪 בדיקת מניה</button>
+    </div>
+    <div class="actions" id="dashboard-actions">
       <button id="btn-scan" class="primary">▶ סרוק עכשיו</button>
       <button id="btn-save">💾 שמור הגדרות</button>
       <button id="btn-cache">🗑 נקה מטמון</button>
@@ -18,39 +22,68 @@
 
   <div id="status-bar" class="status-bar">טוען…</div>
 
-  <main>
-    <section class="card">
-      <h2>יקום המניות</h2>
-      <div id="universe-section"></div>
-    </section>
+  <div id="view-dashboard">
+    <main>
+      <section class="card">
+        <h2>יקום המניות</h2>
+        <div id="universe-section"></div>
+      </section>
 
-    <section class="card">
-      <h2>ניקוד וסינון</h2>
-      <div id="scoring-section"></div>
-    </section>
+      <section class="card">
+        <h2>ניקוד וסינון</h2>
+        <div id="scoring-section"></div>
+      </section>
 
-    <section class="card full">
-      <h2>קריטריוני סריקה</h2>
-      <p class="hint">לכל קריטריון: <b>כבוי</b> = מתעלם · <b>חובה</b> = חייב להתקיים · <b>בונוס</b> = מוסיף נקודות לניקוד.</p>
-      <div id="criteria-section"></div>
-    </section>
+      <section class="card full">
+        <h2>קריטריוני סריקה</h2>
+        <p class="hint">לכל קריטריון: <b>כבוי</b> = מתעלם · <b>חובה</b> = חייב להתקיים · <b>בונוס</b> = מוסיף נקודות לניקוד.</p>
+        <div id="criteria-section"></div>
+      </section>
 
-    <section class="card">
-      <h2>התראות טלגרם</h2>
-      <div id="telegram-section"></div>
-    </section>
+      <section class="card">
+        <h2>התראות טלגרם</h2>
+        <div id="telegram-section"></div>
+      </section>
 
-    <section class="card">
-      <h2>תזמון אוטומטי</h2>
-      <div id="schedule-section"></div>
-    </section>
+      <section class="card">
+        <h2>תזמון אוטומטי</h2>
+        <div id="schedule-section"></div>
+      </section>
 
-    <section class="card full">
-      <h2>תוצאות סריקה <span id="results-count" class="badge"></span></h2>
-      <p class="hint">לחיצה על מניה בטבלה פותחת גרף עם הסימונים של מה שהבוט זיהה.</p>
-      <div id="results-section">עדיין לא בוצעה סריקה.</div>
-    </section>
-  </main>
+      <section class="card full">
+        <h2>תוצאות סריקה <span id="results-count" class="badge"></span></h2>
+        <p class="hint">לחיצה על מניה בטבלה פותחת גרף עם הסימונים של מה שהבוט זיהה.</p>
+        <div id="results-section">עדיין לא בוצעה סריקה.</div>
+      </section>
+    </main>
+  </div>
+
+  <div id="view-test" class="hidden">
+    <main>
+      <section class="card full">
+        <h2>🧪 בדיקת מניה בודדת</h2>
+        <p class="hint">בחר מניה, סמן אילו פונקציות הבוט יזהה עליה, ולחץ "בדוק". הפרמטרים של כל פונקציה נלקחים מדף הניהול.</p>
+        <div class="field">
+          <label>סימול מניה</label>
+          <input id="test-ticker" type="text" placeholder="AAPL">
+          <label>טיימפריים</label>
+          <select id="test-tf">
+            <option value="1d">יומי</option>
+            <option value="1wk">שבועי</option>
+            <option value="1mo">חודשי</option>
+            <option value="60m">שעה</option>
+          </select>
+          <button id="test-run" class="primary">🔍 בדוק מניה</button>
+        </div>
+        <div class="field"><label>פונקציות לזיהוי</label></div>
+        <div id="test-functions" class="test-functions"></div>
+        <div id="test-status" class="muted"></div>
+        <div id="test-results"></div>
+        <div id="test-chart-container" class="chart-box"></div>
+        <div id="test-chart-legend" class="chart-legend"></div>
+      </section>
+    </main>
+  </div>
 
   <div id="chart-modal" class="modal hidden">
     <div class="modal-box">
@@ -67,8 +100,8 @@
         <button id="chart-close">✕ סגור</button>
       </div>
       <div id="chart-status" class="muted"></div>
-      <div id="chart-container"></div>
-      <div id="chart-legend"></div>
+      <div id="chart-container" class="chart-box"></div>
+      <div id="chart-legend" class="chart-legend"></div>
     </div>
   </div>
 

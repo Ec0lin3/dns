@@ -29,7 +29,8 @@ const ZONE = [["discount", "Discount (חצי תחתון)"],
               ["premium", "Premium (חצי עליון)"],
               ["equilibrium", "Equilibrium (סביב 50%)"]];
 const GAP_DIR = [["up", "פער כלפי מעלה"], ["down", "פער כלפי מטה"]];
-const GAP_COND = [["unfilled", "לא מולא"], ["filled", "מולא"], ["any", "כל פער"]];
+const GAP_COND = [["unfilled", "לא מולא"], ["filled", "מולא"],
+                  ["price_inside", "מחיר בתוך הגאפ (כניסה)"], ["any", "כל פער"]];
 const CRIT_ORDER = ["moving_average", "fvg", "liquidity", "range_equilibrium",
                     "gaps", "support_resistance"];
 const CRIT_LABELS = {
@@ -484,6 +485,7 @@ function renderResults(s) {
 // Chart modal (TradingView Lightweight Charts)
 // ---------------------------------------------------------------------------
 let CURRENT_CHART = null;
+let CURRENT_CHART_EL = null;
 
 // Custom primitive that paints FVG zones as filled rectangles.
 function boxPrimitive(boxes) {
@@ -596,14 +598,14 @@ async function loadChart() {
       return;
     }
     status.textContent = "";
-    renderChart(data);
+    renderChart(data, "chart-container", "chart-legend");
   } catch (e) {
     status.textContent = "✗ שגיאה בטעינת הגרף";
   }
 }
 
-function renderChart(data) {
-  const container = document.getElementById("chart-container");
+function renderChart(data, containerId, legendId) {
+  const container = document.getElementById(containerId);
   if (CURRENT_CHART) { CURRENT_CHART.remove(); CURRENT_CHART = null; }
   container.innerHTML = "";
   const LWC = window.LightweightCharts;
@@ -616,6 +618,7 @@ function renderChart(data) {
     rightPriceScale: { borderColor: "#2f3a48" },
   });
   CURRENT_CHART = chart;
+  CURRENT_CHART_EL = container;
 
   const candles = chart.addCandlestickSeries({
     upColor: "#22c55e", downColor: "#ef4444", borderVisible: false,
@@ -653,11 +656,11 @@ function renderChart(data) {
   }
 
   chart.timeScale().fitContent();
-  renderLegend(data.legend);
+  renderLegend(data.legend, legendId);
 }
 
-function renderLegend(legend) {
-  const box = document.getElementById("chart-legend");
+function renderLegend(legend, legendId) {
+  const box = document.getElementById(legendId);
   box.innerHTML = "";
   if (!legend || !legend.length) {
     box.appendChild(h("span", { class: "muted" },
@@ -670,6 +673,88 @@ function renderLegend(legend) {
       h("b", {}, item.label),
       h("span", { class: "legend-desc" }, "— " + item.desc)));
   }
+}
+
+// ---------------------------------------------------------------------------
+// Test page (single-stock analysis)
+// ---------------------------------------------------------------------------
+function renderTestFunctions() {
+  const box = document.getElementById("test-functions");
+  box.innerHTML = "";
+  for (const name of CRIT_ORDER) {
+    const cb = h("input", { type: "checkbox" });
+    cb.checked = true;
+    cb.dataset.crit = name;
+    box.appendChild(h("label", { class: "func-toggle" }, cb,
+      h("span", {}, CRIT_LABELS[name])));
+  }
+}
+
+async function runTest() {
+  const ticker = document.getElementById("test-ticker").value.trim().toUpperCase();
+  const status = document.getElementById("test-status");
+  if (!ticker) { status.textContent = "✗ הזן סימול מניה"; return; }
+  const timeframe = document.getElementById("test-tf").value;
+  const criteria = [...document.querySelectorAll("#test-functions input:checked")]
+    .map((c) => c.dataset.crit);
+  status.textContent = "⏳ בודק את " + ticker + "…";
+  document.getElementById("test-results").innerHTML = "";
+  document.getElementById("test-chart-legend").innerHTML = "";
+  try {
+    const data = await fetch("/api/test", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ ticker, timeframe, criteria }),
+    }).then((r) => r.json());
+    if (data.error) { status.textContent = "✗ " + data.error; return; }
+    status.textContent = "";
+    renderTestResults(data);
+  } catch (e) {
+    status.textContent = "✗ שגיאה בבדיקה";
+  }
+}
+
+function renderTestResults(data) {
+  const box = document.getElementById("test-results");
+  box.innerHTML = "";
+  const breakdown = (data.evaluation && data.evaluation.breakdown) || [];
+  if (!breakdown.length) {
+    box.appendChild(h("p", { class: "muted" }, "לא נבחרו פונקציות לבדיקה."));
+  } else {
+    const table = h("table");
+    table.appendChild(h("tr", {}, h("th", {}, "פונקציה"),
+      h("th", {}, "זוהה?"), h("th", {}, "פירוט")));
+    for (const b of breakdown) {
+      table.appendChild(h("tr", {},
+        h("td", {}, b.label),
+        h("td", {}, h("span", { class: "chip " + (b.passed ? "pass" : "fail") },
+          b.passed ? "✓ כן" : "✗ לא")),
+        h("td", {}, b.detail)));
+    }
+    box.appendChild(table);
+  }
+  const chart = data.chart;
+  if (chart && !chart.error && chart.candles && chart.candles.length) {
+    renderChart(chart, "test-chart-container", "test-chart-legend");
+  } else {
+    if (CURRENT_CHART) { CURRENT_CHART.remove(); CURRENT_CHART = null; }
+    document.getElementById("test-chart-container").innerHTML = "";
+    box.appendChild(h("p", { class: "muted" },
+      "אין נתוני גרף: " + ((chart && chart.error) || "—")));
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Tabs
+// ---------------------------------------------------------------------------
+function switchView(view) {
+  const isTest = view === "test";
+  document.getElementById("view-dashboard").classList.toggle("hidden", isTest);
+  document.getElementById("view-test").classList.toggle("hidden", !isTest);
+  document.getElementById("dashboard-actions").classList.toggle("hidden", isTest);
+  document.getElementById("tab-dashboard").classList.toggle("active", !isTest);
+  document.getElementById("tab-test").classList.toggle("active", isTest);
+  if (CURRENT_CHART) { CURRENT_CHART.remove(); CURRENT_CHART = null; }
 }
 
 // ---------------------------------------------------------------------------
@@ -686,12 +771,16 @@ document.getElementById("chart-tf").addEventListener("change", loadChart);
 document.getElementById("chart-modal").addEventListener("click", (e) => {
   if (e.target.id === "chart-modal") closeChart();
 });
+document.getElementById("tab-dashboard").addEventListener("click",
+  () => switchView("dashboard"));
+document.getElementById("tab-test").addEventListener("click",
+  () => switchView("test"));
+document.getElementById("test-run").addEventListener("click", runTest);
 window.addEventListener("resize", () => {
-  if (CURRENT_CHART) {
-    CURRENT_CHART.applyOptions({
-      width: document.getElementById("chart-container").clientWidth,
-    });
+  if (CURRENT_CHART && CURRENT_CHART_EL) {
+    CURRENT_CHART.applyOptions({ width: CURRENT_CHART_EL.clientWidth });
   }
 });
 
+renderTestFunctions();
 loadConfig().then(pollStatus);
