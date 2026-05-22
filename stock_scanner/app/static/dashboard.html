@@ -1,0 +1,56 @@
+<!DOCTYPE html>
+<html lang="he" dir="rtl">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Stock Scanner Bot</title>
+  <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+  <header>
+    <h1>🤖 Stock Scanner Bot</h1>
+    <div class="actions">
+      <button id="btn-scan" class="primary">▶ סרוק עכשיו</button>
+      <button id="btn-save">💾 שמור הגדרות</button>
+      <button id="btn-cache">🗑 נקה מטמון</button>
+    </div>
+  </header>
+
+  <div id="status-bar" class="status-bar">טוען…</div>
+
+  <main>
+    <section class="card">
+      <h2>יקום המניות</h2>
+      <div id="universe-section"></div>
+    </section>
+
+    <section class="card">
+      <h2>ניקוד וסינון</h2>
+      <div id="scoring-section"></div>
+    </section>
+
+    <section class="card full">
+      <h2>קריטריוני סריקה</h2>
+      <p class="hint">לכל קריטריון: <b>כבוי</b> = מתעלם · <b>חובה</b> = חייב להתקיים · <b>בונוס</b> = מוסיף נקודות לניקוד.</p>
+      <div id="criteria-section"></div>
+    </section>
+
+    <section class="card">
+      <h2>התראות טלגרם</h2>
+      <div id="telegram-section"></div>
+    </section>
+
+    <section class="card">
+      <h2>תזמון אוטומטי</h2>
+      <div id="schedule-section"></div>
+    </section>
+
+    <section class="card full">
+      <h2>תוצאות סריקה <span id="results-count" class="badge"></span></h2>
+      <div id="results-section">עדיין לא בוצעה סריקה.</div>
+    </section>
+  </main>
+
+  <script src="/static/app.js"></script>
+</body>
+</html>

@@ -1,0 +1,64 @@
+{
+  "universe": {
+    "type": "sp500",
+    "custom_tickers": []
+  },
+  "min_score": 1,
+  "criteria": {
+    "moving_average": {
+      "mode": "mandatory",
+      "weight": 1,
+      "match": "any",
+      "checks": [
+        { "check": "price_vs_ma", "ma_type": "EMA", "period": 200, "timeframe": "1d", "condition": "above" },
+        { "check": "ma_cross", "ma_type": "EMA", "fast_period": 20, "slow_period": 50, "timeframe": "1d", "direction": "golden", "within_bars": 10 },
+        { "check": "price_near_ma", "ma_type": "EMA", "period": 50, "timeframe": "1d", "tolerance_pct": 1.5 }
+      ]
+    },
+    "fvg": {
+      "mode": "bonus",
+      "weight": 1,
+      "match": "any",
+      "checks": [
+        { "timeframe": "1wk", "direction": "bullish", "condition": "exists", "lookback": 60 },
+        { "timeframe": "1d", "direction": "bullish", "condition": "price_inside", "lookback": 60 }
+      ]
+    },
+    "liquidity": {
+      "mode": "bonus",
+      "weight": 1,
+      "match": "any",
+      "checks": [
+        { "timeframe": "1d", "strength": 5, "lookback": 120, "condition": "untapped_above", "recency": 5 },
+        { "timeframe": "1d", "strength": 2, "lookback": 60, "condition": "swept_below", "recency": 5 }
+      ]
+    },
+    "range_equilibrium": {
+      "mode": "mandatory",
+      "weight": 1,
+      "timeframe": "1d",
+      "lookback": 60,
+      "zone": "discount",
+      "eq_band_pct": 10
+    },
+    "gaps": {
+      "mode": "bonus",
+      "weight": 1,
+      "timeframe": "1d",
+      "direction": "up",
+      "min_gap_pct": 1.0,
+      "condition": "unfilled",
+      "lookback": 30
+    }
+  },
+  "telegram": {
+    "enabled": false,
+    "bot_token": "",
+    "chat_id": ""
+  },
+  "schedule": {
+    "enabled": false,
+    "time": "16:30",
+    "timezone": "America/New_York"
+  }
+}
