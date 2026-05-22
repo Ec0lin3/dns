@@ -49,7 +49,21 @@
       "min_gap_pct": 1.0,
       "condition": "unfilled",
       "lookback": 30
+    },
+    "support_resistance": {
+      "mode": "bonus",
+      "weight": 1,
+      "timeframe": "1d",
+      "lookback": 250,
+      "line_types": ["horizontal", "trendline"],
+      "swing_strength": 5,
+      "tolerance_pct": 1.0,
+      "trendline_anchor": "lows"
     }
+  },
+  "chart": {
+    "timeframe": "1d",
+    "candles": 250
   },
   "telegram": {
     "enabled": false,

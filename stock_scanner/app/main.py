@@ -6,6 +6,7 @@ from fastapi import FastAPI, Request
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
+from .analysis import build_chart
 from .config import load_config, save_config
 from .data import clear_cache
 from .notifier import send_telegram
@@ -54,6 +55,14 @@ def post_scan():
 @app.get("/api/scan/status")
 def get_scan_status():
     return STATE.snapshot()
+
+
+@app.get("/api/chart/{ticker}")
+def get_chart(ticker: str, timeframe: str | None = None):
+    config = load_config()
+    if timeframe:
+        config.setdefault("chart", {})["timeframe"] = timeframe
+    return build_chart(config, ticker.upper())
 
 
 @app.post("/api/cache/clear")

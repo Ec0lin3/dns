@@ -82,11 +82,11 @@ def find_fvgs(df, direction):
         if direction == "bullish" and highs[i - 2] < lows[i]:
             bottom, top = float(highs[i - 2]), float(lows[i])
             filled = bool((lows[i + 1:] <= bottom).any()) if i + 1 < n else False
-            fvgs.append({"bottom": bottom, "top": top, "filled": filled})
+            fvgs.append({"idx": i, "bottom": bottom, "top": top, "filled": filled})
         elif direction == "bearish" and lows[i - 2] > highs[i]:
             bottom, top = float(highs[i]), float(lows[i - 2])
             filled = bool((highs[i + 1:] >= top).any()) if i + 1 < n else False
-            fvgs.append({"bottom": bottom, "top": top, "filled": filled})
+            fvgs.append({"idx": i, "bottom": bottom, "top": top, "filled": filled})
     return fvgs
 
 
@@ -189,31 +189,36 @@ def check_liquidity(df, strength, lookback, condition, recency=5):
 # --------------------------------------------------------------------------
 # Gaps
 # --------------------------------------------------------------------------
-def check_gap(df, direction, min_gap_pct, condition, lookback):
-    if len(df) < 2:
-        return False, "not enough data"
-    sub = df.tail(lookback).reset_index(drop=True)
-    opens = sub["Open"].values
-    closes = sub["Close"].values
-    highs = sub["High"].values
-    lows = sub["Low"].values
-
-    found = None
-    for i in range(len(sub) - 1, 0, -1):
+def find_gaps(df, direction, min_gap_pct):
+    """All gaps in `df` matching the direction. idx is positional within df."""
+    opens = df["Open"].values
+    closes = df["Close"].values
+    gaps = []
+    for i in range(1, len(df)):
         prev_close = closes[i - 1]
         if prev_close <= 0:
             continue
         gap_pct = (opens[i] - prev_close) / prev_close * 100
-        if direction == "up" and gap_pct >= min_gap_pct:
-            found = (i, gap_pct, prev_close)
-            break
-        if direction == "down" and gap_pct <= -min_gap_pct:
-            found = (i, gap_pct, prev_close)
-            break
-    if found is None:
+        if (direction == "up" and gap_pct >= min_gap_pct) or \
+           (direction == "down" and gap_pct <= -min_gap_pct):
+            gaps.append({"idx": i, "gap_pct": gap_pct,
+                         "prev_close": float(prev_close)})
+    return gaps
+
+
+def check_gap(df, direction, min_gap_pct, condition, lookback):
+    if len(df) < 2:
+        return False, "not enough data"
+    sub = df.tail(lookback).reset_index(drop=True)
+    highs = sub["High"].values
+    lows = sub["Low"].values
+
+    gaps = find_gaps(sub, direction, min_gap_pct)
+    if not gaps:
         return False, f"no {direction} gap >= {min_gap_pct}%"
 
-    i, gap_pct, prev_close = found
+    last = gaps[-1]
+    i, gap_pct, prev_close = last["idx"], last["gap_pct"], last["prev_close"]
     if direction == "up":
         filled = bool(lows[i:].min() <= prev_close)
     else:
@@ -227,3 +232,77 @@ def check_gap(df, direction, min_gap_pct, condition, lookback):
         ok = not filled
     state = "filled" if filled else "open"
     return ok, f"{direction} gap {gap_pct:+.1f}% ({state})"
+
+
+# --------------------------------------------------------------------------
+# Support / Resistance
+# --------------------------------------------------------------------------
+def _touches(low, high, level, tolerance_pct):
+    """True if the candle range [low, high] reaches `level` within tolerance."""
+    if level <= 0:
+        return False
+    if low <= level <= high:
+        return True
+    dist = min(abs(low - level), abs(high - level)) / level * 100
+    return dist <= tolerance_pct
+
+
+def support_resistance_levels(df, lookback, swing_strength):
+    """Horizontal S/R levels: swing highs = resistance, swing lows = support."""
+    sub = df.tail(lookback)
+    is_high, is_low = _swing_points(sub, swing_strength)
+    levels = []
+    for ts, price in sub["High"][is_high].items():
+        levels.append({"price": float(price), "kind": "resistance", "time": ts})
+    for ts, price in sub["Low"][is_low].items():
+        levels.append({"price": float(price), "kind": "support", "time": ts})
+    return levels
+
+
+def support_trendline(df, lookback, swing_strength, anchor):
+    """Diagonal trendline through the last two swing lows (or highs).
+
+    Returns the two anchor points plus the line value extrapolated to the
+    most recent bar, or None if fewer than two swing points exist.
+    """
+    sub = df.tail(lookback)
+    is_high, is_low = _swing_points(sub, swing_strength)
+    mask = is_high if anchor == "highs" else is_low
+    col = "High" if anchor == "highs" else "Low"
+    pts = [(pos, float(sub[col].iloc[pos]))
+           for pos in range(len(sub)) if bool(mask.iloc[pos])]
+    if len(pts) < 2:
+        return None
+    (x1, y1), (x2, y2) = pts[-2], pts[-1]
+    if x2 == x1:
+        return None
+    slope = (y2 - y1) / (x2 - x1)
+    last = len(sub) - 1
+    return {
+        "anchor": anchor,
+        "t1": sub.index[x1], "y1": y1,
+        "t2": sub.index[x2], "y2": y2,
+        "t_last": sub.index[last],
+        "price_now": y1 + slope * (last - x1),
+    }
+
+
+def check_support_resistance(df, lookback, line_types, swing_strength,
+                             tolerance_pct, trendline_anchor):
+    """Pass when the current candle touches a horizontal level or trendline."""
+    if len(df) < 2 * swing_strength + 2:
+        return False, "not enough data"
+    candle = df.iloc[-1]
+    low, high = float(candle["Low"]), float(candle["High"])
+    touched = []
+    if "horizontal" in line_types:
+        for lvl in support_resistance_levels(df, lookback, swing_strength):
+            if _touches(low, high, lvl["price"], tolerance_pct):
+                touched.append(f"{lvl['kind']} {lvl['price']:.2f}")
+    if "trendline" in line_types:
+        tl = support_trendline(df, lookback, swing_strength, trendline_anchor)
+        if tl is not None and _touches(low, high, tl["price_now"], tolerance_pct):
+            touched.append(f"trendline {tl['price_now']:.2f}")
+    if touched:
+        return True, "touched " + ", ".join(touched[:3])
+    return False, "no S/R touch"

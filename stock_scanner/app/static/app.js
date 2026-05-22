@@ -30,14 +30,19 @@ const ZONE = [["discount", "Discount (חצי תחתון)"],
               ["equilibrium", "Equilibrium (סביב 50%)"]];
 const GAP_DIR = [["up", "פער כלפי מעלה"], ["down", "פער כלפי מטה"]];
 const GAP_COND = [["unfilled", "לא מולא"], ["filled", "מולא"], ["any", "כל פער"]];
-const CRIT_ORDER = ["moving_average", "fvg", "liquidity", "range_equilibrium", "gaps"];
+const CRIT_ORDER = ["moving_average", "fvg", "liquidity", "range_equilibrium",
+                    "gaps", "support_resistance"];
 const CRIT_LABELS = {
   moving_average: "📈 ממוצעים נעים",
   fvg: "🟦 FVG — Fair Value Gap",
   liquidity: "💧 נזילות (Liquidity)",
   range_equilibrium: "📊 Range / Equilibrium",
   gaps: "↕ פערים (Gaps)",
+  support_resistance: "📏 תמיכה / התנגדות",
 };
+const SR_ANCHOR = [["lows", "2 נמוכים (תמיכה עולה)"],
+                   ["highs", "2 גבוהים (התנגדות יורדת)"]];
+const CHART_TF = [["1d", "יומי"], ["1wk", "שבועי"], ["1mo", "חודשי"], ["60m", "שעה"]];
 
 // ---------------------------------------------------------------------------
 // Tiny DOM helper
@@ -79,6 +84,13 @@ function numInput(value, onChange, step) {
 function textInput(value, onChange, placeholder) {
   const i = h("input", { type: "text", value: value || "", placeholder: placeholder || "" });
   i.addEventListener("change", () => onChange(i.value));
+  return i;
+}
+
+function checkbox(checked, onChange) {
+  const i = h("input", { type: "checkbox" });
+  i.checked = !!checked;
+  i.addEventListener("change", () => onChange(i.checked));
   return i;
 }
 
@@ -163,6 +175,7 @@ function critCard(name) {
   else if (name === "liquidity") buildLiquidity(cfg, body);
   else if (name === "range_equilibrium") buildRange(cfg, body);
   else if (name === "gaps") buildGaps(cfg, body);
+  else if (name === "support_resistance") buildSupportResistance(cfg, body);
   return h("div", { class: "crit" }, head, body);
 }
 
@@ -300,6 +313,33 @@ function buildGaps(cfg, body) {
   body.appendChild(field("נרות אחורה", numInput(cfg.lookback, (v) => { cfg.lookback = v; })));
 }
 
+// --- support / resistance ---
+function buildSupportResistance(cfg, body) {
+  if (!Array.isArray(cfg.line_types)) cfg.line_types = ["horizontal"];
+  body.appendChild(field("טיימפריים", sel(cfg.timeframe, TF, (v) => { cfg.timeframe = v; })));
+  body.appendChild(field("נרות אחורה", numInput(cfg.lookback, (v) => { cfg.lookback = v; })));
+  const toggle = (type, on) => {
+    const set = new Set(cfg.line_types);
+    if (on) set.add(type); else set.delete(type);
+    cfg.line_types = Array.from(set);
+  };
+  body.appendChild(h("div", { class: "field" },
+    h("label", {}, "סוגי קווים"),
+    checkbox(cfg.line_types.includes("horizontal"), (v) => toggle("horizontal", v)),
+    h("span", { class: "muted" }, "אופקי"),
+    checkbox(cfg.line_types.includes("trendline"), (v) => toggle("trendline", v)),
+    h("span", { class: "muted" }, "קו מגמה אלכסוני")));
+  body.appendChild(field("עוצמת סווינג",
+    numInput(cfg.swing_strength, (v) => { cfg.swing_strength = v; })));
+  body.appendChild(field("סבולת נגיעה (%)",
+    numInput(cfg.tolerance_pct, (v) => { cfg.tolerance_pct = v; }, "0.1")));
+  body.appendChild(field("עוגן קו המגמה",
+    sel(cfg.trendline_anchor, SR_ANCHOR, (v) => { cfg.trendline_anchor = v; })));
+  body.appendChild(h("p", { class: "muted" },
+    "קו אופקי במחיר נקודת קיצון, וקו מגמה אלכסוני שמחבר 2 נקודות קיצון אחרונות. " +
+    "אם הנר הנוכחי נוגע בקו (בטווח הסבולת) — הקריטריון עובר."));
+}
+
 // ---------------------------------------------------------------------------
 // Render: telegram
 // ---------------------------------------------------------------------------
@@ -430,7 +470,7 @@ function renderResults(s) {
       chips.appendChild(h("span", { class: cls, title: b.detail },
         `${b.label}: ${b.detail}`));
     }
-    table.appendChild(h("tr", {},
+    table.appendChild(h("tr", { class: "clickable", onclick: () => openChart(r.ticker) },
       h("td", {}, h("b", {}, r.ticker)),
       h("td", {}, r.price !== null ? "$" + r.price.toFixed(2) : "-"),
       h("td", {}, h("span", { class: "score-pill" }, `${r.score}/${r.max_bonus}`)),
@@ -441,6 +481,151 @@ function renderResults(s) {
 }
 
 // ---------------------------------------------------------------------------
+// Chart modal (TradingView Lightweight Charts)
+// ---------------------------------------------------------------------------
+let CURRENT_CHART = null;
+
+// Custom primitive that paints FVG zones as filled rectangles.
+function boxPrimitive(boxes) {
+  let chart = null, series = null;
+  return {
+    attached(p) { chart = p.chart; series = p.series; },
+    detached() { chart = null; series = null; },
+    updateAllViews() {},
+    paneViews() {
+      return [{
+        renderer() {
+          return {
+            draw(target) {
+              if (!chart || !series) return;
+              target.useBitmapCoordinateSpace((scope) => {
+                const ctx = scope.context;
+                const ts = chart.timeScale();
+                for (const b of boxes) {
+                  const x1 = ts.timeToCoordinate(b.time1);
+                  const x2 = ts.timeToCoordinate(b.time2);
+                  const y1 = series.priceToCoordinate(b.price1);
+                  const y2 = series.priceToCoordinate(b.price2);
+                  if (x1 == null || x2 == null || y1 == null || y2 == null) continue;
+                  const hr = scope.horizontalPixelRatio, vr = scope.verticalPixelRatio;
+                  const left = Math.min(x1, x2) * hr, right = Math.max(x1, x2) * hr;
+                  const top = Math.min(y1, y2) * vr, bot = Math.max(y1, y2) * vr;
+                  ctx.fillStyle = b.color;
+                  ctx.fillRect(left, top, right - left, bot - top);
+                }
+              });
+            },
+          };
+        },
+      }];
+    },
+  };
+}
+
+async function openChart(ticker) {
+  const modal = document.getElementById("chart-modal");
+  modal.classList.remove("hidden");
+  modal.dataset.ticker = ticker;
+  document.getElementById("chart-title").textContent = "גרף — " + ticker;
+  document.getElementById("chart-tf").value =
+    (CONFIG && CONFIG.chart && CONFIG.chart.timeframe) || "1d";
+  await loadChart();
+}
+
+function closeChart() {
+  document.getElementById("chart-modal").classList.add("hidden");
+  if (CURRENT_CHART) { CURRENT_CHART.remove(); CURRENT_CHART = null; }
+}
+
+async function loadChart() {
+  const modal = document.getElementById("chart-modal");
+  const ticker = modal.dataset.ticker;
+  const tf = document.getElementById("chart-tf").value;
+  const status = document.getElementById("chart-status");
+  document.getElementById("chart-legend").innerHTML = "";
+  status.textContent = "טוען נתונים…";
+  try {
+    const data = await fetch(`/api/chart/${ticker}?timeframe=${tf}`)
+      .then((r) => r.json());
+    if (data.error || !data.candles || !data.candles.length) {
+      status.textContent = "✗ " + (data.error || "אין נתונים להצגה");
+      if (CURRENT_CHART) { CURRENT_CHART.remove(); CURRENT_CHART = null; }
+      return;
+    }
+    status.textContent = "";
+    renderChart(data);
+  } catch (e) {
+    status.textContent = "✗ שגיאה בטעינת הגרף";
+  }
+}
+
+function renderChart(data) {
+  const container = document.getElementById("chart-container");
+  if (CURRENT_CHART) { CURRENT_CHART.remove(); CURRENT_CHART = null; }
+  container.innerHTML = "";
+  const LWC = window.LightweightCharts;
+  const chart = LWC.createChart(container, {
+    width: container.clientWidth,
+    height: 440,
+    layout: { background: { color: "#0f1419" }, textColor: "#e6e9ee" },
+    grid: { vertLines: { color: "#1e2730" }, horzLines: { color: "#1e2730" } },
+    timeScale: { borderColor: "#2f3a48", timeVisible: true },
+    rightPriceScale: { borderColor: "#2f3a48" },
+  });
+  CURRENT_CHART = chart;
+
+  const candles = chart.addCandlestickSeries({
+    upColor: "#22c55e", downColor: "#ef4444", borderVisible: false,
+    wickUpColor: "#22c55e", wickDownColor: "#ef4444",
+  });
+  candles.setData(data.candles);
+
+  for (const ln of data.lines) {
+    const s = chart.addLineSeries({
+      color: ln.color, lineWidth: 2,
+      lineStyle: ln.dashed ? LWC.LineStyle.Dashed : LWC.LineStyle.Solid,
+      priceLineVisible: false, lastValueVisible: false,
+      crosshairMarkerVisible: false,
+    });
+    s.setData(ln.points);
+  }
+
+  for (const pl of data.priceLines) {
+    candles.createPriceLine({
+      price: pl.price, color: pl.color, lineWidth: 1,
+      lineStyle: LWC.LineStyle.Dashed, axisLabelVisible: true, title: pl.label,
+    });
+  }
+
+  if (data.boxes && data.boxes.length) {
+    candles.attachPrimitive(boxPrimitive(data.boxes));
+  }
+
+  if (data.markers && data.markers.length) {
+    candles.setMarkers(data.markers);
+  }
+
+  chart.timeScale().fitContent();
+  renderLegend(data.legend);
+}
+
+function renderLegend(legend) {
+  const box = document.getElementById("chart-legend");
+  box.innerHTML = "";
+  if (!legend || !legend.length) {
+    box.appendChild(h("span", { class: "muted" },
+      "אין סימונים — אף קריטריון לא מופעל."));
+    return;
+  }
+  for (const item of legend) {
+    box.appendChild(h("div", { class: "legend-item" },
+      h("span", { class: "legend-swatch", style: "background:" + item.color }),
+      h("b", {}, item.label),
+      h("span", { class: "legend-desc" }, "— " + item.desc)));
+  }
+}
+
+// ---------------------------------------------------------------------------
 // Wire up
 // ---------------------------------------------------------------------------
 document.getElementById("btn-scan").addEventListener("click", startScan);
@@ -448,6 +633,18 @@ document.getElementById("btn-save").addEventListener("click", saveConfig);
 document.getElementById("btn-cache").addEventListener("click", async () => {
   await fetch("/api/cache/clear", { method: "POST" });
   setStatus("✓ המטמון נוקה — הסריקה הבאה תמשוך נתונים טריים", "ok");
+});
+document.getElementById("chart-close").addEventListener("click", closeChart);
+document.getElementById("chart-tf").addEventListener("change", loadChart);
+document.getElementById("chart-modal").addEventListener("click", (e) => {
+  if (e.target.id === "chart-modal") closeChart();
+});
+window.addEventListener("resize", () => {
+  if (CURRENT_CHART) {
+    CURRENT_CHART.applyOptions({
+      width: document.getElementById("chart-container").clientWidth,
+    });
+  }
 });
 
 loadConfig().then(pollStatus);

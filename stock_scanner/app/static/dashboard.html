@@ -47,10 +47,32 @@
 
     <section class="card full">
       <h2>תוצאות סריקה <span id="results-count" class="badge"></span></h2>
+      <p class="hint">לחיצה על מניה בטבלה פותחת גרף עם הסימונים של מה שהבוט זיהה.</p>
       <div id="results-section">עדיין לא בוצעה סריקה.</div>
     </section>
   </main>
 
+  <div id="chart-modal" class="modal hidden">
+    <div class="modal-box">
+      <div class="modal-head">
+        <span id="chart-title">גרף</span>
+        <label>טיימפריים</label>
+        <select id="chart-tf">
+          <option value="1d">יומי</option>
+          <option value="1wk">שבועי</option>
+          <option value="1mo">חודשי</option>
+          <option value="60m">שעה</option>
+        </select>
+        <span class="spacer"></span>
+        <button id="chart-close">✕ סגור</button>
+      </div>
+      <div id="chart-status" class="muted"></div>
+      <div id="chart-container"></div>
+      <div id="chart-legend"></div>
+    </div>
+  </div>
+
+  <script src="/static/lightweight-charts.js"></script>
   <script src="/static/app.js"></script>
 </body>
 </html>

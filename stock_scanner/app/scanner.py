@@ -15,6 +15,7 @@ CRITERION_LABELS = {
     "liquidity": "נזילות",
     "range_equilibrium": "Range/EQ",
     "gaps": "פערים",
+    "support_resistance": "תמיכה/התנגדות",
 }
 
 
@@ -133,12 +134,25 @@ def eval_gaps(cfg, data, ticker):
                          int(cfg.get("lookback", 30)))
 
 
+def eval_support_resistance(cfg, data, ticker):
+    df = _df(data, cfg.get("timeframe", "1d"), ticker)
+    if df is None or df.empty:
+        return False, "no data"
+    return ind.check_support_resistance(
+        df, int(cfg.get("lookback", 250)),
+        cfg.get("line_types", ["horizontal"]),
+        int(cfg.get("swing_strength", 5)),
+        float(cfg.get("tolerance_pct", 1.0)),
+        cfg.get("trendline_anchor", "lows"))
+
+
 EVALUATORS = {
     "moving_average": eval_moving_average,
     "fvg": eval_fvg,
     "liquidity": eval_liquidity,
     "range_equilibrium": eval_range,
     "gaps": eval_gaps,
+    "support_resistance": eval_support_resistance,
 }
 
 

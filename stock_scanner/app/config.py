@@ -71,6 +71,21 @@ DEFAULT_CONFIG = {
             "condition": "unfilled",  # unfilled | filled | any
             "lookback": 30,
         },
+        "support_resistance": {
+            "mode": "bonus",
+            "weight": 1,
+            "timeframe": "1d",
+            "lookback": 250,
+            "line_types": ["horizontal", "trendline"],  # any of these
+            "swing_strength": 5,
+            "tolerance_pct": 1.0,
+            "trendline_anchor": "lows",  # lows | highs
+        },
+    },
+    # Settings for the per-stock chart shown when a result row is clicked.
+    "chart": {
+        "timeframe": "1d",
+        "candles": 250,
     },
     "telegram": {
         "enabled": False,
