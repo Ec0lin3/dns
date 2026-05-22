@@ -732,6 +732,18 @@ function renderTestResults(data) {
   if (!breakdown.length) {
     box.appendChild(h("p", { class: "muted" }, "לא נבחרו פונקציות לבדיקה."));
   } else {
+    const ev = data.evaluation || {};
+    const passed = !!ev.included;
+    const threshold = Math.min((CONFIG && CONFIG.min_score) || 0,
+                               ev.max_bonus || 0);
+    box.appendChild(h("div", { class: "test-summary " + (passed ? "ok" : "no") },
+      h("span", {}, passed ? "✓ הייתה עוברת את הסינון"
+                           : "✗ לא הייתה עוברת את הסינון"),
+      h("span", {}, `ניקוד בונוס: ${ev.score}/${ev.max_bonus} (נדרש: ${threshold})`),
+      h("span", {}, `קריטריוני חובה: ${ev.mandatory_ok ? "✓ כולם" : "✗ לא כולם"}`),
+      ev.price != null ? h("span", {}, `מחיר: $${ev.price}`) : null));
+    box.appendChild(h("p", { class: "muted" },
+      "התוצאה מחושבת לפי הפונקציות שסימנת והמצב שלהן (חובה/בונוס) מדף הניהול."));
     const table = h("table");
     table.appendChild(h("tr", {}, h("th", {}, "פונקציה"),
       h("th", {}, "זוהה?"), h("th", {}, "פירוט")));
