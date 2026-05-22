@@ -1,5 +1,5 @@
 config.json
-app/_cache/
+_cache/
 __pycache__/
 *.pyc
 .venv/
