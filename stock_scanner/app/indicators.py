@@ -260,22 +260,41 @@ def support_resistance_levels(df, lookback, swing_strength):
 
 
 def support_trendline(df, lookback, swing_strength, anchor):
-    """Diagonal trendline through the last two swing lows (or highs).
+    """Diagonal trendline anchored on a major swing extreme.
+
+    anchor='lows'  -> rising support: from the lowest swing low to the most
+                      recent swing low that formed after it.
+    anchor='highs' -> falling resistance: from the highest swing high to the
+                      most recent swing high after it.
 
     Returns the two anchor points plus the line value extrapolated to the
     most recent bar, or None if fewer than two swing points exist.
     """
     sub = df.tail(lookback)
     is_high, is_low = _swing_points(sub, swing_strength)
-    mask = is_high if anchor == "highs" else is_low
-    col = "High" if anchor == "highs" else "Low"
+    if anchor == "highs":
+        mask, col = is_high, "High"
+    else:
+        mask, col = is_low, "Low"
     pts = [(pos, float(sub[col].iloc[pos]))
            for pos in range(len(sub)) if bool(mask.iloc[pos])]
     if len(pts) < 2:
         return None
-    (x1, y1), (x2, y2) = pts[-2], pts[-1]
+
+    # anchor 1 = the major extreme (lowest low / highest high)
+    if anchor == "highs":
+        major = max(range(len(pts)), key=lambda k: pts[k][1])
+    else:
+        major = min(range(len(pts)), key=lambda k: pts[k][1])
+    later = [p for p in pts if p[0] > pts[major][0]]
+    if later:
+        (x1, y1), (x2, y2) = pts[major], later[-1]
+    else:
+        # the major extreme is the most recent swing -> fall back to last two
+        (x1, y1), (x2, y2) = pts[-2], pts[-1]
     if x2 == x1:
         return None
+
     slope = (y2 - y1) / (x2 - x1)
     last = len(sub) - 1
     return {

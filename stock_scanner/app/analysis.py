@@ -15,6 +15,7 @@ GREEN = "#22c55e"
 RED = "#ef4444"
 BLUE = "#3b82f6"
 AMBER = "#f59e0b"
+TRENDLINE = "#facc15"
 INTRADAY = ("15m", "30m", "60m", "1h")
 
 
@@ -41,7 +42,7 @@ def _merge_levels(levels, tol_pct=0.6, keep=7):
 def _empty(ticker, timeframe, error):
     return {"ticker": ticker, "timeframe": timeframe, "error": error,
             "candles": [], "lines": [], "priceLines": [], "boxes": [],
-            "markers": [], "legend": []}
+            "markers": [], "trendlines": [], "legend": []}
 
 
 def build_chart(config, ticker):
@@ -190,16 +191,15 @@ def build_chart(config, ticker):
             tl = ind.support_trendline(df, lookback, strength,
                                        sr_cfg.get("trendline_anchor", "lows"))
             if tl is not None:
-                out["lines"].append({
-                    "label": "S/R trendline", "color": GREEN, "dashed": True,
-                    "points": [
-                        {"time": _fmt(tl["t1"], timeframe),
-                         "value": round(tl["y1"], 4)},
-                        {"time": last_time,
-                         "value": round(tl["price_now"], 4)},
-                    ],
+                out["trendlines"].append({
+                    "color": TRENDLINE,
+                    "p1": {"time": _fmt(tl["t1"], timeframe),
+                           "price": round(tl["y1"], 4)},
+                    "p2": {"time": _fmt(tl["t2"], timeframe),
+                           "price": round(tl["y2"], 4)},
                 })
-                legend(GREEN, "קו מגמה", "קו מגמה אלכסוני על 2 נקודות קיצון")
+                legend(TRENDLINE, "קו מגמה",
+                       "קו מגמה אלכסוני מ-2 נקודות קיצון, נמתח קדימה")
 
     # markers must be unique per time and sorted for Lightweight Charts
     seen_times = set()

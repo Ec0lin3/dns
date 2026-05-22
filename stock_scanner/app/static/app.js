@@ -336,7 +336,7 @@ function buildSupportResistance(cfg, body) {
   body.appendChild(field("עוגן קו המגמה",
     sel(cfg.trendline_anchor, SR_ANCHOR, (v) => { cfg.trendline_anchor = v; })));
   body.appendChild(h("p", { class: "muted" },
-    "קו אופקי במחיר נקודת קיצון, וקו מגמה אלכסוני שמחבר 2 נקודות קיצון אחרונות. " +
+    "קו אופקי במחיר נקודת קיצון, וקו מגמה אלכסוני מהשפל/שיא המשמעותי שנמתח קדימה. " +
     "אם הנר הנוכחי נוגע בקו (בטווח הסבולת) — הקריטריון עובר."));
 }
 
@@ -522,6 +522,49 @@ function boxPrimitive(boxes) {
   };
 }
 
+// Draws a trendline through two anchors and projects it to the right edge.
+function trendlinePrimitive(lines) {
+  let chart = null, series = null;
+  return {
+    attached(p) { chart = p.chart; series = p.series; },
+    detached() { chart = null; series = null; },
+    updateAllViews() {},
+    paneViews() {
+      return [{
+        renderer() {
+          return {
+            draw(target) {
+              if (!chart || !series) return;
+              target.useBitmapCoordinateSpace((scope) => {
+                const ctx = scope.context;
+                const ts = chart.timeScale();
+                const hr = scope.horizontalPixelRatio, vr = scope.verticalPixelRatio;
+                const rightCss = scope.mediaSize.width;
+                for (const ln of lines) {
+                  const x1 = ts.timeToCoordinate(ln.p1.time);
+                  const x2 = ts.timeToCoordinate(ln.p2.time);
+                  const y1 = series.priceToCoordinate(ln.p1.price);
+                  const y2 = series.priceToCoordinate(ln.p2.price);
+                  if (x1 == null || x2 == null || y1 == null || y2 == null) continue;
+                  if (x2 === x1) continue;
+                  const slope = (y2 - y1) / (x2 - x1);
+                  const yEnd = y1 + slope * (rightCss - x1);
+                  ctx.beginPath();
+                  ctx.strokeStyle = ln.color;
+                  ctx.lineWidth = 2 * hr;
+                  ctx.moveTo(x1 * hr, y1 * vr);
+                  ctx.lineTo(rightCss * hr, yEnd * vr);
+                  ctx.stroke();
+                }
+              });
+            },
+          };
+        },
+      }];
+    },
+  };
+}
+
 async function openChart(ticker) {
   const modal = document.getElementById("chart-modal");
   modal.classList.remove("hidden");
@@ -599,6 +642,10 @@ function renderChart(data) {
 
   if (data.boxes && data.boxes.length) {
     candles.attachPrimitive(boxPrimitive(data.boxes));
+  }
+
+  if (data.trendlines && data.trendlines.length) {
+    candles.attachPrimitive(trendlinePrimitive(data.trendlines));
   }
 
   if (data.markers && data.markers.length) {
