@@ -122,7 +122,8 @@ def eval_range(cfg, data, ticker):
     return ind.check_range(df, int(cfg.get("swing_strength", 10)),
                            int(cfg.get("max_lookback", 250)),
                            cfg.get("zone", "discount"),
-                           float(cfg.get("eq_band_pct", 10)))
+                           float(cfg.get("eq_band_pct", 10)),
+                           cfg.get("eq_match", "close"))
 
 
 def eval_gaps(cfg, data, ticker):

@@ -133,22 +133,36 @@ def dealing_range(df, swing_strength, max_lookback):
     }
 
 
-def check_range(df, swing_strength, max_lookback, zone, eq_band_pct):
+def eq_band(dr, eq_band_pct):
+    """Price bounds of the equilibrium band around the 50% level."""
+    span = dr["high"] - dr["low"]
+    return (dr["low"] + (50 - eq_band_pct) / 100 * span,
+            dr["low"] + (50 + eq_band_pct) / 100 * span)
+
+
+def check_range(df, swing_strength, max_lookback, zone, eq_band_pct,
+                eq_match="close"):
     if len(df) < 2 * swing_strength + 2:
         return False, "not enough data"
     dr = dealing_range(df, swing_strength, max_lookback)
     if dr is None:
         return False, "no clear range"
-    price = float(df["Close"].iloc[-1])
+    candle = df.iloc[-1]
+    price = float(candle["Close"])
     pos_pct = (price - dr["low"]) / (dr["high"] - dr["low"]) * 100
+    detail = (f"range {dr['low']:.2f}-{dr['high']:.2f} "
+              f"pos {pos_pct:.0f}% (EQ {dr['eq']:.2f})")
     if zone == "discount":
-        ok = price < dr["eq"]
-    elif zone == "premium":
-        ok = price > dr["eq"]
-    else:  # equilibrium
-        ok = abs(pos_pct - 50) <= eq_band_pct
-    return ok, (f"range {dr['low']:.2f}-{dr['high']:.2f} "
-                f"pos {pos_pct:.0f}% (EQ {dr['eq']:.2f})")
+        return price < dr["eq"], detail
+    if zone == "premium":
+        return price > dr["eq"], detail
+    # equilibrium
+    band_lo, band_hi = eq_band(dr, eq_band_pct)
+    if eq_match == "touch":
+        ok = float(candle["Low"]) <= band_hi and float(candle["High"]) >= band_lo
+        return ok, detail + (" (EQ touched)" if ok else " (EQ not touched)")
+    ok = abs(pos_pct - 50) <= eq_band_pct
+    return ok, detail
 
 
 # --------------------------------------------------------------------------

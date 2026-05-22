@@ -28,6 +28,8 @@ const LIQ_COND = [["untapped_above", "נזילות לא-נגועה מעל"],
 const ZONE = [["discount", "Discount (חצי תחתון)"],
               ["premium", "Premium (חצי עליון)"],
               ["equilibrium", "Equilibrium (סביב 50%)"]];
+const EQ_MATCH = [["close", "מחיר הסגירה בתוך הרצועה"],
+                  ["touch", "הנר נגע ברצועה (wick)"]];
 const GAP_DIR = [["up", "פער כלפי מעלה"], ["down", "פער כלפי מטה"]];
 const GAP_COND = [["unfilled", "לא מולא"], ["filled", "מולא"],
                   ["price_inside", "מחיר בתוך הגאפ (כניסה)"], ["any", "כל פער"]];
@@ -299,12 +301,18 @@ function buildRange(cfg, body) {
     numInput(cfg.swing_strength, (v) => { cfg.swing_strength = v; })));
   body.appendChild(field("מקסימום נרות אחורה לחיפוש",
     numInput(cfg.max_lookback, (v) => { cfg.max_lookback = v; })));
-  body.appendChild(field("אזור מבוקש", sel(cfg.zone, ZONE, (v) => { cfg.zone = v; })));
-  body.appendChild(field("רוחב אזור Equilibrium (%)",
-    numInput(cfg.eq_band_pct, (v) => { cfg.eq_band_pct = v; })));
+  body.appendChild(field("אזור מבוקש",
+    sel(cfg.zone, ZONE, (v) => { cfg.zone = v; renderCriteria(); })));
+  if (cfg.zone === "equilibrium") {
+    body.appendChild(field("רוחב אזור Equilibrium (%)",
+      numInput(cfg.eq_band_pct, (v) => { cfg.eq_band_pct = v; })));
+    body.appendChild(field("מתי להתריע",
+      sel(cfg.eq_match || "close", EQ_MATCH, (v) => { cfg.eq_match = v; })));
+  }
   body.appendChild(h("p", { class: "muted" },
-    "ה-Range ננעל אוטומטית על סווינג-נמוך וסווינג-גבוה משמעותיים אחרונים — " +
-    "לא חלון קבוע. עוצמת סווינג גבוהה = רק קיצונים גדולים, כמו סימון ידני."));
+    "ה-Range ננעל אוטומטית על סווינג-נמוך וסווינג-גבוה משמעותיים אחרונים — לא חלון קבוע. " +
+    "ב-Equilibrium: 'מחיר הסגירה' = הסגירה בתוך הרצועה · " +
+    "'הנר נגע' = ה-wick חדר לרצועה גם אם נסגר מחוצה לה."));
 }
 
 // --- gaps ---

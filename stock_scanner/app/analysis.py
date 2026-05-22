@@ -158,6 +158,16 @@ def build_chart(config, ticker):
                 "color": GREEN, "shape": "arrowUp", "text": "Range Low"})
             legend(BLUE, "Range / Equilibrium",
                    "טווח הסווינג המשמעותי האחרון; EQ = אמצע (50%)")
+            if rng_cfg.get("zone") == "equilibrium":
+                band_lo, band_hi = ind.eq_band(
+                    dr, float(rng_cfg.get("eq_band_pct", 10)))
+                anchor = min(dr["high_time"], dr["low_time"])
+                out["boxes"].append({
+                    "time1": _fmt(anchor, timeframe), "time2": last_time,
+                    "price1": round(band_lo, 4), "price2": round(band_hi, 4),
+                    "color": "rgba(59,130,246,0.14)", "label": "EQ band",
+                })
+                legend(BLUE, "אזור EQ", "רצועת ה-50% שהבוט בודק נגיעה בה")
 
     # --- gaps (drawn as shaded price zones, separate from FVG) ----------
     gap_cfg = crit.get("gaps", {})

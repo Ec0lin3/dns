@@ -62,6 +62,7 @@ DEFAULT_CONFIG = {
             "max_lookback": 250,      # how far back to search for swings
             "zone": "discount",       # discount | premium | equilibrium
             "eq_band_pct": 10,
+            "eq_match": "close",      # close | touch (equilibrium zone only)
         },
         "gaps": {
             "mode": "bonus",
