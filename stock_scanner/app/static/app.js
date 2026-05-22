@@ -295,13 +295,16 @@ function buildLiquidity(cfg, body) {
 // --- range ---
 function buildRange(cfg, body) {
   body.appendChild(field("טיימפריים", sel(cfg.timeframe, TF, (v) => { cfg.timeframe = v; })));
-  body.appendChild(field("נרות אחורה (גודל ה-Range)",
-    numInput(cfg.lookback, (v) => { cfg.lookback = v; })));
+  body.appendChild(field("עוצמת סווינג (משמעותיות)",
+    numInput(cfg.swing_strength, (v) => { cfg.swing_strength = v; })));
+  body.appendChild(field("מקסימום נרות אחורה לחיפוש",
+    numInput(cfg.max_lookback, (v) => { cfg.max_lookback = v; })));
   body.appendChild(field("אזור מבוקש", sel(cfg.zone, ZONE, (v) => { cfg.zone = v; })));
   body.appendChild(field("רוחב אזור Equilibrium (%)",
     numInput(cfg.eq_band_pct, (v) => { cfg.eq_band_pct = v; })));
   body.appendChild(h("p", { class: "muted" },
-    "ה-50% מחושב מהנמוך-הנמוך ועד הגבוה-הגבוה בטווח שנבחר."));
+    "ה-Range ננעל אוטומטית על סווינג-נמוך וסווינג-גבוה משמעותיים אחרונים — " +
+    "לא חלון קבוע. עוצמת סווינג גבוהה = רק קיצונים גדולים, כמו סימון ידני."));
 }
 
 // --- gaps ---

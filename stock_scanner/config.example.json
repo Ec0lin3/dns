@@ -37,7 +37,8 @@
       "mode": "mandatory",
       "weight": 1,
       "timeframe": "1d",
-      "lookback": 60,
+      "swing_strength": 10,
+      "max_lookback": 250,
       "zone": "discount",
       "eq_band_pct": 10
     },

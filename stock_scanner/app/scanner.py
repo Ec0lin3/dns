@@ -119,7 +119,8 @@ def eval_range(cfg, data, ticker):
     df = _df(data, cfg.get("timeframe", "1d"), ticker)
     if df is None or df.empty:
         return False, "no data"
-    return ind.check_range(df, int(cfg.get("lookback", 60)),
+    return ind.check_range(df, int(cfg.get("swing_strength", 10)),
+                           int(cfg.get("max_lookback", 250)),
                            cfg.get("zone", "discount"),
                            float(cfg.get("eq_band_pct", 10)))
 

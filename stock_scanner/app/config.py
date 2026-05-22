@@ -58,7 +58,8 @@ DEFAULT_CONFIG = {
             "mode": "mandatory",
             "weight": 1,
             "timeframe": "1d",
-            "lookback": 60,
+            "swing_strength": 10,     # how significant the swing high/low must be
+            "max_lookback": 250,      # how far back to search for swings
             "zone": "discount",       # discount | premium | equilibrium
             "eq_band_pct": 10,
         },

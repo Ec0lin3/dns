@@ -136,22 +136,28 @@ def build_chart(config, ticker):
         if hi_idx or lo_idx:
             legend(RED, "נזילות", "נקודות סווינג שמעליהן/מתחתן יושבת נזילות")
 
-    # --- range / equilibrium --------------------------------------------
+    # --- range / equilibrium (auto dealing range) -----------------------
     rng_cfg = crit.get("range_equilibrium", {})
     if rng_cfg.get("mode", "off") != "off":
-        sub = df.tail(int(rng_cfg.get("lookback", 60)))
-        low_low = float(sub["Low"].min())
-        high_high = float(sub["High"].max())
-        eq = (low_low + high_high) / 2
-        out["priceLines"] += [
-            {"price": round(high_high, 2), "color": RED,
-             "label": f"Range High {high_high:.2f}"},
-            {"price": round(eq, 2), "color": BLUE,
-             "label": f"EQ 50% {eq:.2f}"},
-            {"price": round(low_low, 2), "color": GREEN,
-             "label": f"Range Low {low_low:.2f}"},
-        ]
-        legend(BLUE, "Equilibrium 50%", "אמצע הטווח (נמוך-נמוך עד גבוה-גבוה)")
+        dr = ind.dealing_range(df, int(rng_cfg.get("swing_strength", 10)),
+                               int(rng_cfg.get("max_lookback", 250)))
+        if dr is not None:
+            out["priceLines"] += [
+                {"price": round(dr["high"], 2), "color": RED,
+                 "label": f"Range High {dr['high']:.2f}"},
+                {"price": round(dr["eq"], 2), "color": BLUE,
+                 "label": f"EQ 50% {dr['eq']:.2f}"},
+                {"price": round(dr["low"], 2), "color": GREEN,
+                 "label": f"Range Low {dr['low']:.2f}"},
+            ]
+            out["markers"].append({
+                "time": _fmt(dr["high_time"], timeframe), "position": "aboveBar",
+                "color": RED, "shape": "arrowDown", "text": "Range High"})
+            out["markers"].append({
+                "time": _fmt(dr["low_time"], timeframe), "position": "belowBar",
+                "color": GREEN, "shape": "arrowUp", "text": "Range Low"})
+            legend(BLUE, "Range / Equilibrium",
+                   "טווח הסווינג המשמעותי האחרון; EQ = אמצע (50%)")
 
     # --- gaps (drawn as shaded price zones, separate from FVG) ----------
     gap_cfg = crit.get("gaps", {})

@@ -107,26 +107,48 @@ def check_fvg(df, direction, condition, lookback):
 
 
 # --------------------------------------------------------------------------
-# Range / Equilibrium  (50% of lowest-low .. highest-high)
+# Range / Equilibrium  (auto dealing range from swing structure)
 # --------------------------------------------------------------------------
-def check_range(df, lookback, zone, eq_band_pct):
-    if len(df) < 2:
+def dealing_range(df, swing_strength, max_lookback):
+    """The current dealing range: most recent significant swing low & high.
+
+    Unlike a fixed window's max/min, this locks onto the actual swing
+    structure, so the range adapts whether the leg spans 20, 30 or 60 bars.
+    `swing_strength` controls how significant a swing must be (bars each side).
+    """
+    sub = df.tail(max_lookback)
+    is_high, is_low = _swing_points(sub, swing_strength)
+    high_pos = [i for i in range(len(sub)) if bool(is_high.iloc[i])]
+    low_pos = [i for i in range(len(sub)) if bool(is_low.iloc[i])]
+    if not high_pos or not low_pos:
+        return None
+    hp, lp = high_pos[-1], low_pos[-1]
+    high = float(sub["High"].iloc[hp])
+    low = float(sub["Low"].iloc[lp])
+    if high <= low:
+        return None
+    return {
+        "high": high, "low": low, "eq": (high + low) / 2,
+        "high_time": sub.index[hp], "low_time": sub.index[lp],
+    }
+
+
+def check_range(df, swing_strength, max_lookback, zone, eq_band_pct):
+    if len(df) < 2 * swing_strength + 2:
         return False, "not enough data"
-    sub = df.tail(lookback)
-    low_low = float(sub["Low"].min())
-    high_high = float(sub["High"].max())
-    if high_high <= low_low:
-        return False, "flat range"
-    eq = (low_low + high_high) / 2
+    dr = dealing_range(df, swing_strength, max_lookback)
+    if dr is None:
+        return False, "no clear range"
     price = float(df["Close"].iloc[-1])
-    pos_pct = (price - low_low) / (high_high - low_low) * 100
+    pos_pct = (price - dr["low"]) / (dr["high"] - dr["low"]) * 100
     if zone == "discount":
-        ok = price < eq
+        ok = price < dr["eq"]
     elif zone == "premium":
-        ok = price > eq
+        ok = price > dr["eq"]
     else:  # equilibrium
         ok = abs(pos_pct - 50) <= eq_band_pct
-    return ok, f"range pos {pos_pct:.0f}% (EQ {eq:.2f})"
+    return ok, (f"range {dr['low']:.2f}-{dr['high']:.2f} "
+                f"pos {pos_pct:.0f}% (EQ {dr['eq']:.2f})")
 
 
 # --------------------------------------------------------------------------
