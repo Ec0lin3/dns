@@ -32,7 +32,9 @@
 param(
     [string]$ConfigPath = "$PSScriptRoot\config.json",
     [switch]$SkipAcl,
-    [switch]$NoOpen
+    [switch]$NoOpen,
+    [int]$MaxGroups = 1500,   # safety stop: above this, almost certainly an over-broad name pattern
+    [switch]$Force            # bypass the MaxGroups guard
 )
 
 $ErrorActionPreference = 'Stop'
@@ -71,11 +73,13 @@ if (-not (Test-Path $ConfigPath)) {
     }
   },
   "groupNamePatterns": [
-    "*admin*", "*administrator*", "Domain Admins", "Enterprise Admins", "Schema Admins",
-    "Administrators", "Account Operators", "Backup Operators", "Server Operators",
-    "Print Operators", "DnsAdmins", "Group Policy Creator Owners",
-    "*priv*", "*tier0*", "*-DA", "*helpdesk*", "*passwordreset*"
+    "Domain Admins", "Enterprise Admins", "Schema Admins", "Administrators",
+    "Account Operators", "Backup Operators", "Server Operators", "Print Operators",
+    "DnsAdmins", "Group Policy Creator Owners", "Cert Publishers",
+    "Key Admins", "Enterprise Key Admins",
+    "Tier0*", "T0-*", "*-DA", "*-Tier0", "*PrivAccess*", "*PAW*"
   ],
+  "_groupNamePatterns_note": "Tight by default to avoid matching thousands. Add broad wildcards like '*admin*' only if you use an admin naming convention.",
   "sensitiveRights": [
     { "name": "Reset Password", "type": "ExtendedRight", "guid": "00299570-246d-11d0-a768-00aa006e0529" },
     { "name": "Change Password", "type": "ExtendedRight", "guid": "ab721a53-1e2f-11d0-9819-00aa0040529b" },
@@ -172,21 +176,57 @@ $sensitiveGroups = foreach ($g in $allGroups) {
 $sensitiveGroups = @($sensitiveGroups)
 Write-Ok "Found $($sensitiveGroups.Count) sensitive group(s)."
 
+# Per-pattern breakdown — exposes an over-broad pattern (e.g. '*admin*' matching thousands)
+$breakdown = $sensitiveGroups | Group-Object MatchedPattern | Sort-Object Count -Descending
+Write-Host "    Matched-by-pattern breakdown:" -ForegroundColor DarkGray
+$breakdown | ForEach-Object { Write-Host ("      {0,-28} {1}" -f $_.Name, $_.Count) -ForegroundColor DarkGray }
+
+# Safety guard: a sane sensitive-group list is tens, not thousands. Above the cap,
+# nested expansion = (matched x 2) recursive LDAP queries against the DC -> effectively hangs.
+if ($sensitiveGroups.Count -gt $MaxGroups -and -not $Force) {
+    Write-Host ""
+    Write-Warn2 "STOP: $($sensitiveGroups.Count) groups matched (cap = $MaxGroups). That is almost certainly an over-broad pattern, not a real sensitive-group set."
+    Write-Warn2 "The biggest offender above is likely the culprit (e.g. '*admin*'). Tighten 'groupNamePatterns' in your config.json."
+    Write-Warn2 "Tips: drop catch-all wildcards like '*admin*'/'*priv*', or anchor them (e.g. 'Tier0-*', '*-DA'). Exact names like 'Domain Admins' are safest."
+    Write-Warn2 "To run anyway (slow), re-run with  -Force  (optionally raise  -MaxGroups)."
+    # Still write the matched-groups list so the user can review what over-matched.
+    $reviewCsv = Join-Path $outFolder "sensitive-groups_OVERMATCH_$stamp.csv"
+    $sensitiveGroups | Select-Object Name, sAMAccountName, MatchedPattern, DistinguishedName |
+        Export-Csv $reviewCsv -NoTypeInformation -Encoding UTF8
+    Write-Host "    Wrote matched list for review -> $reviewCsv" -ForegroundColor DarkGray
+    return
+}
+
 # ----------------------------------------------------------------------------
 # 2. Nested membership expansion (both directions)
 # ----------------------------------------------------------------------------
-Write-Step "Expanding nested membership (recursive)..."
+Write-Step "Expanding nested membership (recursive) for $($sensitiveGroups.Count) group(s)..."
 
-# 2a. Effective MEMBERS of each sensitive group (who is inside, incl. nested groups)
-$memberRows   = New-Object System.Collections.Generic.List[object]
-$sensitiveSids = New-Object System.Collections.Generic.HashSet[string]
+# Single pass over the sensitive groups, doing BOTH directions, with live progress.
+#   2a. members   = who is effectively inside each group (incl. nested groups)
+#   2b. memberOf  = which groups each sensitive group is nested inside
+$memberRows      = New-Object System.Collections.Generic.List[object]
+$nestingRows     = New-Object System.Collections.Generic.List[object]
+$sensitiveSids   = New-Object System.Collections.Generic.HashSet[string]
 $groupMemberSids = @{}   # groupDN -> HashSet[string] of effective member SIDs (for shadow-admin check)
+$sensitiveDNs    = [System.Collections.Generic.HashSet[string]]::new([string[]]$sensitiveGroups.DistinguishedName)
 
+$total = $sensitiveGroups.Count
+$sw    = [System.Diagnostics.Stopwatch]::StartNew()
+$i     = 0
 foreach ($grp in $sensitiveGroups) {
+    $i++
+    if ($i -eq 1 -or $i % 25 -eq 0 -or $i -eq $total) {
+        $rate = if ($sw.Elapsed.TotalSeconds -gt 0) { [math]::Round($i / $sw.Elapsed.TotalSeconds, 1) } else { 0 }
+        $eta  = if ($rate -gt 0) { [timespan]::FromSeconds([math]::Round(($total - $i) / $rate)) } else { '?' }
+        Write-Host ("    nesting {0}/{1}  ({2}/s, ETA {3})" -f $i, $total, $rate, $eta) -ForegroundColor DarkGray
+    }
+
     [void]$sensitiveSids.Add($grp.objectSid.Value)
     $perGroup = New-Object System.Collections.Generic.HashSet[string]
     [void]$perGroup.Add($grp.objectSid.Value)
-    # Recursive members via LDAP_MATCHING_RULE_IN_CHAIN (1.2.840.113556.1.4.1941)
+
+    # 2a — recursive members via LDAP_MATCHING_RULE_IN_CHAIN (1.2.840.113556.1.4.1941)
     $members = Get-ADObject -LDAPFilter "(memberOf:1.2.840.113556.1.4.1941:=$($grp.DistinguishedName))" `
                             -Properties objectClass, sAMAccountName, objectSid @adParams
     foreach ($m in $members) {
@@ -201,24 +241,21 @@ foreach ($grp in $sensitiveGroups) {
         })
     }
     $groupMemberSids[$grp.DistinguishedName] = $perGroup
-}
 
-# 2b. Which sensitive groups are NESTED INSIDE other groups (parent chain)
-$nestingRows = New-Object System.Collections.Generic.List[object]
-foreach ($grp in $sensitiveGroups) {
+    # 2b — recursive parents (which groups this sensitive group is nested inside)
     $parents = Get-ADGroup -LDAPFilter "(member:1.2.840.113556.1.4.1941:=$($grp.DistinguishedName))" `
                            -Properties name @adParams
     foreach ($par in $parents) {
-        $isParentSensitive = $sensitiveGroups.DistinguishedName -contains $par.DistinguishedName
         $nestingRows.Add([pscustomobject]@{
             SensitiveGroup   = $grp.Name
             NestedInside     = $par.Name
             ParentDN         = $par.DistinguishedName
-            ParentSensitive  = $isParentSensitive
+            ParentSensitive  = $sensitiveDNs.Contains($par.DistinguishedName)
         })
     }
 }
-Write-Ok "Effective members: $($memberRows.Count) | Nesting links: $($nestingRows.Count) | Unique sensitive principals (incl. nested): $($sensitiveSids.Count)"
+$sw.Stop()
+Write-Ok "Effective members: $($memberRows.Count) | Nesting links: $($nestingRows.Count) | Unique sensitive principals (incl. nested): $($sensitiveSids.Count)  [$([math]::Round($sw.Elapsed.TotalSeconds))s]"
 
 # ----------------------------------------------------------------------------
 # 3. ACL scan — who holds the configured dangerous rights
