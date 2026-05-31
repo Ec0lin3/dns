@@ -34,7 +34,8 @@ param(
     [switch]$SkipAcl,
     [switch]$NoOpen,
     [int]$MaxGroups = 1500,   # safety stop: above this, almost certainly an over-broad name pattern
-    [switch]$Force            # bypass the MaxGroups guard
+    [switch]$Force,           # bypass the MaxGroups guard
+    [switch]$IncludeMembers   # also enumerate the USERS inside each group (off by default — groups only)
 )
 
 $ErrorActionPreference = 'Stop'
@@ -180,17 +181,8 @@ $seedNames   = if ($disc -and $disc.seedPrivilegedGroups)        { @($disc.seedP
       'Backup Operators','Server Operators','Print Operators','DnsAdmins','Group Policy Creator Owners',
       'Key Admins','Enterprise Key Admins') }
 
-Write-Step "Discovering sensitive groups (name + adminCount + nesting)..."
-# NOTE: do NOT request member/memberOf here — fetching them for EVERY group triggers
-# expensive range-retrieval and can hang on large domains. They are never used in-memory
-# (nested expansion uses dedicated LDAP queries below).
-$swLoad = [System.Diagnostics.Stopwatch]::StartNew()
-Write-Host "    Loading all groups (lightweight attrs only)..." -ForegroundColor DarkGray
-$allGroups = @(Get-ADGroup -Filter * -SearchBase $searchBase -Properties sAMAccountName, objectSid, adminCount @adParams)
-$swLoad.Stop()
-Write-Host ("    Loaded {0} groups in {1}s." -f $allGroups.Count, [math]::Round($swLoad.Elapsed.TotalSeconds)) -ForegroundColor DarkGray
-$groupByDN = @{}
-foreach ($g in $allGroups) { $groupByDN[$g.DistinguishedName] = $g }
+Write-Step "Discovering sensitive groups (targeted LDAP — no full enumeration)..."
+$props = @('sAMAccountName','objectSid','adminCount')
 
 # Accumulator: DN -> group object, tagged with the reason(s) it is sensitive
 $found = @{}
@@ -203,19 +195,28 @@ function Add-Sensitive {
     }
     if ($found[$g.DistinguishedName].Reasons -notcontains $reason) { $found[$g.DistinguishedName].Reasons.Add($reason) }
 }
+# Escape LDAP filter metacharacters. Keep '*' — it is an intended wildcard in name patterns.
+function Convert-LdapWildcard([string]$s) { $s.Replace('\','\5c').Replace('(','\28').Replace(')','\29').Replace([char]0,'\00') }
 
-# 1a. By name pattern
-if ($byName) {
-    foreach ($g in $allGroups) {
-        foreach ($p in $cfg.groupNamePatterns) {
-            if ($g.Name -like $p -or $g.sAMAccountName -like $p) { Add-Sensitive $g "name:$p"; break }
-        }
+# 1a. By name — ONE server-side query built from all patterns (no client-side scan of 48k groups)
+if ($byName -and @($cfg.groupNamePatterns).Count -gt 0) {
+    $clauses = foreach ($p in $cfg.groupNamePatterns) { $pe = Convert-LdapWildcard $p; "(name=$pe)(sAMAccountName=$pe)" }
+    $nameFilter = "(&(objectCategory=group)(|$($clauses -join '')))"
+    Write-Host "    [name] querying $(@($cfg.groupNamePatterns).Count) pattern(s) in one LDAP call..." -ForegroundColor DarkGray
+    $hit = @(Get-ADGroup -LDAPFilter $nameFilter -Properties $props -SearchBase $searchBase @adParams)
+    foreach ($g in $hit) {
+        $why = $cfg.groupNamePatterns | Where-Object { $g.Name -like $_ -or $g.sAMAccountName -like $_ } | Select-Object -First 1
+        Add-Sensitive $g "name:$why"
     }
+    Write-Host "    [name] $($hit.Count) group(s)." -ForegroundColor DarkGray
 }
 
-# 1b. By adminCount=1 (AdminSDHolder/SDProp-protected — name-independent, strongest signal)
+# 1b. By adminCount=1 — ONE indexed query (returns only AdminSDHolder-protected groups; name-independent)
 if ($byAdminCnt) {
-    foreach ($g in $allGroups) { if ($g.adminCount -eq 1) { Add-Sensitive $g 'adminCount=1' } }
+    Write-Host "    [adminCount=1] querying..." -ForegroundColor DarkGray
+    $hit = @(Get-ADGroup -LDAPFilter "(&(objectCategory=group)(adminCount=1))" -Properties $props -SearchBase $searchBase @adParams)
+    foreach ($g in $hit) { Add-Sensitive $g 'adminCount=1' }
+    Write-Host "    [adminCount=1] $($hit.Count) group(s)." -ForegroundColor DarkGray
 }
 
 # 1c. By nesting inside seed privileged groups (recursive) — catches org-specific names
@@ -223,19 +224,17 @@ if ($byNested) {
     $si = 0; $sTot = $seedNames.Count
     foreach ($seed in $seedNames) {
         $si++
-        $seedGrp = $allGroups | Where-Object { $_.Name -eq $seed -or $_.sAMAccountName -eq $seed } | Select-Object -First 1
+        $se = Convert-LdapWildcard $seed
+        $seedGrp = @(Get-ADGroup -LDAPFilter "(|(name=$se)(sAMAccountName=$se))" @adParams) | Select-Object -First 1
         if (-not $seedGrp) { Write-Host ("    seed {0}/{1} '{2}': not found, skip" -f $si, $sTot, $seed) -ForegroundColor DarkGray; continue }
         Write-Host ("    seed {0}/{1} '{2}': finding nested groups..." -f $si, $sTot, $seed) -ForegroundColor DarkGray
         try {
-            $nested = @(Get-ADGroup -LDAPFilter "(memberOf:1.2.840.113556.1.4.1941:=$($seedGrp.DistinguishedName))" @adParams)
+            $nested = @(Get-ADGroup -LDAPFilter "(&(objectCategory=group)(memberOf:1.2.840.113556.1.4.1941:=$($seedGrp.DistinguishedName)))" -Properties $props @adParams)
         } catch {
             Write-Warn2 "seed '$seed' nested query failed: $($_.Exception.Message)"; continue
         }
-        foreach ($n in $nested) {
-            $full = if ($groupByDN.ContainsKey($n.DistinguishedName)) { $groupByDN[$n.DistinguishedName] }
-                    else { Get-ADGroup -Identity $n.DistinguishedName -Properties sAMAccountName, objectSid, adminCount @adParams }
-            Add-Sensitive $full "nested-in:$seed"
-        }
+        foreach ($n in $nested) { Add-Sensitive $n "nested-in:$seed" }
+        Write-Host ("    seed {0}/{1} '{2}': {3} nested group(s)." -f $si, $sTot, $seed, $nested.Count) -ForegroundColor DarkGray
     }
 }
 
@@ -268,17 +267,16 @@ if ($sensitiveGroups.Count -gt $MaxGroups -and -not $Force) {
 }
 
 # ----------------------------------------------------------------------------
-# 2. Nested membership expansion (both directions)
+# 2. Group nesting (group-to-group only). Users are NOT enumerated by default.
 # ----------------------------------------------------------------------------
-Write-Step "Expanding nested membership (recursive) for $($sensitiveGroups.Count) group(s)..."
+# nested GROUPS (which groups each sensitive group is nested inside) = always.
+# nested MEMBERS (the users inside each group)                       = only with -IncludeMembers.
+Write-Step "Mapping group nesting for $($sensitiveGroups.Count) group(s)$(if ($IncludeMembers) { ' + members (-IncludeMembers)' } else { ' (groups only)' })..."
 
-# Single pass over the sensitive groups, doing BOTH directions, with live progress.
-#   2a. members   = who is effectively inside each group (incl. nested groups)
-#   2b. memberOf  = which groups each sensitive group is nested inside
 $memberRows      = New-Object System.Collections.Generic.List[object]
 $nestingRows     = New-Object System.Collections.Generic.List[object]
 $sensitiveSids   = New-Object System.Collections.Generic.HashSet[string]
-$groupMemberSids = @{}   # groupDN -> HashSet[string] of effective member SIDs (for shadow-admin check)
+$groupMemberSids = @{}   # groupDN -> HashSet[string] (group's own SID + member SIDs if enumerated)
 $sensitiveDNs    = [System.Collections.Generic.HashSet[string]]::new([string[]]$sensitiveGroups.DistinguishedName)
 
 $total = $sensitiveGroups.Count
@@ -296,23 +294,25 @@ foreach ($grp in $sensitiveGroups) {
     $perGroup = New-Object System.Collections.Generic.HashSet[string]
     [void]$perGroup.Add($grp.objectSid.Value)
 
-    # 2a — recursive members via LDAP_MATCHING_RULE_IN_CHAIN (1.2.840.113556.1.4.1941)
-    $members = Get-ADObject -LDAPFilter "(memberOf:1.2.840.113556.1.4.1941:=$($grp.DistinguishedName))" `
-                            -Properties objectClass, sAMAccountName, objectSid @adParams
-    foreach ($m in $members) {
-        if ($m.objectSid) { [void]$sensitiveSids.Add($m.objectSid.Value); [void]$perGroup.Add($m.objectSid.Value) }
-        $memberRows.Add([pscustomobject]@{
-            SensitiveGroup = $grp.Name
-            MatchedPattern = $grp.MatchedPattern
-            MemberName     = $m.sAMAccountName
-            MemberClass    = $m.objectClass
-            MemberDN       = $m.DistinguishedName
-            Relation       = 'effective-member (nested)'
-        })
+    # 2a (optional) — recursive members. Skipped by default; this is the heavy per-group query.
+    if ($IncludeMembers) {
+        $members = Get-ADObject -LDAPFilter "(memberOf:1.2.840.113556.1.4.1941:=$($grp.DistinguishedName))" `
+                                -Properties objectClass, sAMAccountName, objectSid @adParams
+        foreach ($m in $members) {
+            if ($m.objectSid) { [void]$sensitiveSids.Add($m.objectSid.Value); [void]$perGroup.Add($m.objectSid.Value) }
+            $memberRows.Add([pscustomobject]@{
+                SensitiveGroup = $grp.Name
+                MatchedPattern = $grp.MatchedPattern
+                MemberName     = $m.sAMAccountName
+                MemberClass    = $m.objectClass
+                MemberDN       = $m.DistinguishedName
+                Relation       = 'effective-member (nested)'
+            })
+        }
     }
     $groupMemberSids[$grp.DistinguishedName] = $perGroup
 
-    # 2b — recursive parents (which groups this sensitive group is nested inside)
+    # 2b — recursive parents (which groups this sensitive group is nested inside). Group-level only.
     $parents = Get-ADGroup -LDAPFilter "(member:1.2.840.113556.1.4.1941:=$($grp.DistinguishedName))" `
                            -Properties name @adParams
     foreach ($par in $parents) {
@@ -325,7 +325,8 @@ foreach ($grp in $sensitiveGroups) {
     }
 }
 $sw.Stop()
-Write-Ok "Effective members: $($memberRows.Count) | Nesting links: $($nestingRows.Count) | Unique sensitive principals (incl. nested): $($sensitiveSids.Count)  [$([math]::Round($sw.Elapsed.TotalSeconds))s]"
+$memNote = if ($IncludeMembers) { "Effective members: $($memberRows.Count) | " } else { 'Members: skipped (groups only) | ' }
+Write-Ok "$memNote Nesting links: $($nestingRows.Count) | Sensitive groups: $($sensitiveSids.Count)  [$([math]::Round($sw.Elapsed.TotalSeconds))s]"
 
 # ----------------------------------------------------------------------------
 # 3. ACL scan — who holds the configured dangerous rights
@@ -496,16 +497,16 @@ Write-Step "Writing reports to $outFolder ..."
 
 $files = @{
     Groups   = Join-Path $outFolder "sensitive-groups_$stamp.csv"
-    Members  = Join-Path $outFolder "nested-members_$stamp.csv"
     Nesting  = Join-Path $outFolder "group-nesting_$stamp.csv"
     Acl      = Join-Path $outFolder "acl-findings_$stamp.csv"
     Shadow   = Join-Path $outFolder "shadow-admins_$stamp.csv"
 }
+if ($IncludeMembers) { $files['Members'] = Join-Path $outFolder "nested-members_$stamp.csv" }
 
 $groupRows = $sensitiveGroups | Select-Object Name, sAMAccountName, MatchedPattern, DistinguishedName
 $groupRows   | Export-Csv $files.Groups  -NoTypeInformation -Encoding UTF8
-$memberRows  | Export-Csv $files.Members -NoTypeInformation -Encoding UTF8
 $nestingRows | Export-Csv $files.Nesting -NoTypeInformation -Encoding UTF8
+if ($IncludeMembers) { $memberRows | Export-Csv $files.Members -NoTypeInformation -Encoding UTF8 }
 $shadowRows  | Export-Csv $files.Shadow  -NoTypeInformation -Encoding UTF8
 if (-not $SkipAcl) { $aclRows | Export-Csv $files.Acl -NoTypeInformation -Encoding UTF8 }
 
@@ -519,7 +520,14 @@ if ($cfg.output.html) {
 
     # Sections
     $tblGroups  = New-HtmlTable -Rows $groupRows   -Columns 'Name','sAMAccountName','MatchedPattern','DistinguishedName'
-    $tblMembers = New-HtmlTable -Rows $memberRows  -Columns 'SensitiveGroup','MemberName','MemberClass','Relation','MemberDN'
+    # Members card/section only when -IncludeMembers was used
+    if ($IncludeMembers) {
+        $tblMembers     = New-HtmlTable -Rows $memberRows -Columns 'SensitiveGroup','MemberName','MemberClass','Relation','MemberDN'
+        $membersCard    = "<div class=`"card`"><div class=`"n`">$($memberRows.Count)</div><div class=`"l`">Nested Members</div></div>"
+        $membersSection = "<section><h2>Nested / Effective Members</h2><div class=`"legend`">Who is effectively inside each sensitive group, incl. via nested groups.</div>$tblMembers</section>"
+    } else {
+        $membersCard = ''; $membersSection = ''
+    }
     $nestClass  = @{ Test = { param($r) $r.ParentSensitive }; Class = 'hot' }
     $tblNesting = New-HtmlTable -Rows $nestingRows -Columns 'SensitiveGroup','NestedInside','ParentSensitive','ParentDN' -RowClass $nestClass
 
@@ -584,7 +592,7 @@ if ($cfg.output.html) {
 <div class="wrap">
   <div class="cards">
     <div class="card"><div class="n">$($sensitiveGroups.Count)</div><div class="l">Sensitive Groups</div></div>
-    <div class="card"><div class="n">$($memberRows.Count)</div><div class="l">Nested Members</div></div>
+    $membersCard
     <div class="card"><div class="n">$($nestingRows.Count)</div><div class="l">Nesting Links</div></div>
     <div class="card $(if(-not $SkipAcl -and $nonInherited.Count){'alert'})"><div class="n">$aclCount</div><div class="l">ACL Findings</div></div>
     <div class="card $(if($nonInherited.Count){'alert'})"><div class="n">$($nonInherited.Count)</div><div class="l">Direct (non-inherited)</div></div>
@@ -592,30 +600,27 @@ if ($cfg.output.html) {
   </div>
 
   <section>
-    <h2>1. Sensitive Groups (matched by name)</h2>
+    <h2>1. Sensitive Groups</h2>
+    <div class="legend">Discovered by name pattern, adminCount=1 (AdminSDHolder-protected), and nesting inside privileged groups. The 'MatchedPattern' column shows why each group is sensitive.</div>
     $tblGroups
   </section>
 
-  <section>
-    <h2>2. Nested / Effective Members</h2>
-    <div class="legend">Who is effectively inside each sensitive group, including via nested groups (recursive).</div>
-    $tblMembers
-  </section>
+  $membersSection
 
   <section>
-    <h2>3. Group Nesting</h2>
+    <h2>2. Group Nesting</h2>
     <div class="legend">Which groups each sensitive group is nested inside. <span class="tag">red = parent is also sensitive</span></div>
     $tblNesting
   </section>
 
   <section>
-    <h2>4. ACL Findings &mdash; dangerous rights held by sensitive principals</h2>
+    <h2>3. ACL Findings &mdash; dangerous rights held by sensitive principals</h2>
     <div class="legend">Each row = an ACE granting a configured right (e.g. Reset Password) to a sensitive group or its nested member. <span class="tag">red = directly assigned (not inherited)</span></div>
     $tblAcl
   </section>
 
   <section>
-    <h2>5. Shadow Admins &mdash; control over a sensitive group without membership</h2>
+    <h2>4. Shadow Admins &mdash; control over a sensitive group without membership</h2>
     <div class="legend">Principals who can take over a sensitive group (GenericAll / WriteDacl / WriteOwner / write membership) but are NOT members &mdash; they can add themselves. Built-in privileged trustees excluded. <span class="tag">red = directly assigned (not inherited)</span></div>
     $tblShadow
   </section>
@@ -631,7 +636,7 @@ if ($cfg.output.html) {
 Write-Host ""
 Write-Ok "DONE."
 Write-Host "  Sensitive groups : $($sensitiveGroups.Count)"  -ForegroundColor White
-Write-Host "  Nested members   : $($memberRows.Count)"        -ForegroundColor White
+if ($IncludeMembers) { Write-Host "  Nested members   : $($memberRows.Count)" -ForegroundColor White }
 Write-Host "  Nesting links    : $($nestingRows.Count)"       -ForegroundColor White
 if (-not $SkipAcl) { Write-Host "  ACL findings     : $($aclRows.Count)" -ForegroundColor White }
 Write-Host "  Shadow admins    : $($shadowRows.Count)" -ForegroundColor $(if ($shadowRows.Count) { 'Red' } else { 'White' })
