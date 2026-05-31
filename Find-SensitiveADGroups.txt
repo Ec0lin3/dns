@@ -181,7 +181,14 @@ $seedNames   = if ($disc -and $disc.seedPrivilegedGroups)        { @($disc.seedP
       'Key Admins','Enterprise Key Admins') }
 
 Write-Step "Discovering sensitive groups (name + adminCount + nesting)..."
-$allGroups = Get-ADGroup -Filter * -SearchBase $searchBase -Properties member, memberOf, sAMAccountName, objectSid, adminCount @adParams
+# NOTE: do NOT request member/memberOf here — fetching them for EVERY group triggers
+# expensive range-retrieval and can hang on large domains. They are never used in-memory
+# (nested expansion uses dedicated LDAP queries below).
+$swLoad = [System.Diagnostics.Stopwatch]::StartNew()
+Write-Host "    Loading all groups (lightweight attrs only)..." -ForegroundColor DarkGray
+$allGroups = @(Get-ADGroup -Filter * -SearchBase $searchBase -Properties sAMAccountName, objectSid, adminCount @adParams)
+$swLoad.Stop()
+Write-Host ("    Loaded {0} groups in {1}s." -f $allGroups.Count, [math]::Round($swLoad.Elapsed.TotalSeconds)) -ForegroundColor DarkGray
 $groupByDN = @{}
 foreach ($g in $allGroups) { $groupByDN[$g.DistinguishedName] = $g }
 
@@ -213,13 +220,20 @@ if ($byAdminCnt) {
 
 # 1c. By nesting inside seed privileged groups (recursive) — catches org-specific names
 if ($byNested) {
+    $si = 0; $sTot = $seedNames.Count
     foreach ($seed in $seedNames) {
+        $si++
         $seedGrp = $allGroups | Where-Object { $_.Name -eq $seed -or $_.sAMAccountName -eq $seed } | Select-Object -First 1
-        if (-not $seedGrp) { continue }
-        $nested = Get-ADGroup -LDAPFilter "(memberOf:1.2.840.113556.1.4.1941:=$($seedGrp.DistinguishedName))" @adParams
+        if (-not $seedGrp) { Write-Host ("    seed {0}/{1} '{2}': not found, skip" -f $si, $sTot, $seed) -ForegroundColor DarkGray; continue }
+        Write-Host ("    seed {0}/{1} '{2}': finding nested groups..." -f $si, $sTot, $seed) -ForegroundColor DarkGray
+        try {
+            $nested = @(Get-ADGroup -LDAPFilter "(memberOf:1.2.840.113556.1.4.1941:=$($seedGrp.DistinguishedName))" @adParams)
+        } catch {
+            Write-Warn2 "seed '$seed' nested query failed: $($_.Exception.Message)"; continue
+        }
         foreach ($n in $nested) {
             $full = if ($groupByDN.ContainsKey($n.DistinguishedName)) { $groupByDN[$n.DistinguishedName] }
-                    else { Get-ADGroup -Identity $n.DistinguishedName -Properties member, memberOf, sAMAccountName, objectSid, adminCount @adParams }
+                    else { Get-ADGroup -Identity $n.DistinguishedName -Properties sAMAccountName, objectSid, adminCount @adParams }
             Add-Sensitive $full "nested-in:$seed"
         }
     }
