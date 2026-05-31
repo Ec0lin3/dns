@@ -35,7 +35,7 @@ param(
     [switch]$NoOpen,
     [int]$MaxGroups = 1500,   # safety stop: above this, almost certainly an over-broad name pattern
     [switch]$Force,           # bypass the MaxGroups guard
-    [switch]$IncludeMembers   # also enumerate the USERS inside each group (off by default — groups only)
+    [switch]$IncludeMembers   # also enumerate the USERS inside each group (off by default - groups only)
 )
 
 $ErrorActionPreference = 'Stop'
@@ -169,7 +169,7 @@ Write-Step "Server : $server"
 Write-Step "Base   : $searchBase"
 
 # ----------------------------------------------------------------------------
-# 1. Discover sensitive groups — by privilege, not just by name
+# 1. Discover sensitive groups - by privilege, not just by name
 # ----------------------------------------------------------------------------
 # Discovery config (defensive defaults if section absent)
 $disc        = if ($cfg.PSObject.Properties.Name -contains 'discovery') { $cfg.discovery } else { $null }
@@ -181,7 +181,7 @@ $seedNames   = if ($disc -and $disc.seedPrivilegedGroups)        { @($disc.seedP
       'Backup Operators','Server Operators','Print Operators','DnsAdmins','Group Policy Creator Owners',
       'Key Admins','Enterprise Key Admins') }
 
-Write-Step "Discovering sensitive groups (targeted LDAP — no full enumeration)..."
+Write-Step "Discovering sensitive groups (targeted LDAP - no full enumeration)..."
 $props = @('sAMAccountName','objectSid','adminCount')
 
 # Accumulator: DN -> group object, tagged with the reason(s) it is sensitive
@@ -195,10 +195,10 @@ function Add-Sensitive {
     }
     if ($found[$g.DistinguishedName].Reasons -notcontains $reason) { $found[$g.DistinguishedName].Reasons.Add($reason) }
 }
-# Escape LDAP filter metacharacters. Keep '*' — it is an intended wildcard in name patterns.
+# Escape LDAP filter metacharacters. Keep '*' - it is an intended wildcard in name patterns.
 function Convert-LdapWildcard([string]$s) { $s.Replace('\','\5c').Replace('(','\28').Replace(')','\29').Replace([char]0,'\00') }
 
-# 1a. By name — ONE server-side query built from all patterns (no client-side scan of 48k groups)
+# 1a. By name - ONE server-side query built from all patterns (no client-side scan of 48k groups)
 if ($byName -and @($cfg.groupNamePatterns).Count -gt 0) {
     $clauses = foreach ($p in $cfg.groupNamePatterns) { $pe = Convert-LdapWildcard $p; "(name=$pe)(sAMAccountName=$pe)" }
     $nameFilter = "(&(objectCategory=group)(|$($clauses -join '')))"
@@ -211,7 +211,7 @@ if ($byName -and @($cfg.groupNamePatterns).Count -gt 0) {
     Write-Host "    [name] $($hit.Count) group(s)." -ForegroundColor DarkGray
 }
 
-# 1b. By adminCount=1 — ONE indexed query (returns only AdminSDHolder-protected groups; name-independent)
+# 1b. By adminCount=1 - ONE indexed query (returns only AdminSDHolder-protected groups; name-independent)
 if ($byAdminCnt) {
     Write-Host "    [adminCount=1] querying..." -ForegroundColor DarkGray
     $hit = @(Get-ADGroup -LDAPFilter "(&(objectCategory=group)(adminCount=1))" -Properties $props -SearchBase $searchBase @adParams)
@@ -219,7 +219,7 @@ if ($byAdminCnt) {
     Write-Host "    [adminCount=1] $($hit.Count) group(s)." -ForegroundColor DarkGray
 }
 
-# 1c. By nesting inside seed privileged groups (recursive) — catches org-specific names
+# 1c. By nesting inside seed privileged groups (recursive) - catches org-specific names
 if ($byNested) {
     $si = 0; $sTot = $seedNames.Count
     foreach ($seed in $seedNames) {
@@ -243,7 +243,7 @@ $sensitiveGroups = @($found.Values)
 foreach ($g in $sensitiveGroups) { $g | Add-Member -NotePropertyName MatchedPattern -NotePropertyValue ($g.Reasons -join '; ') -Force }
 Write-Ok "Found $($sensitiveGroups.Count) sensitive group(s)  [name=$byName adminCount=$byAdminCnt nested=$byNested]."
 
-# Breakdown by discovery reason — exposes an over-broad source (e.g. a wildcard matching thousands)
+# Breakdown by discovery reason - exposes an over-broad source (e.g. a wildcard matching thousands)
 $reasonCounts = @{}
 foreach ($g in $sensitiveGroups) { foreach ($r in $g.Reasons) { $reasonCounts[$r] = 1 + ($(if ($reasonCounts.ContainsKey($r)) { $reasonCounts[$r] } else { 0 })) } }
 Write-Host "    Discovery breakdown (groups per reason; a group can have several):" -ForegroundColor DarkGray
@@ -294,7 +294,7 @@ foreach ($grp in $sensitiveGroups) {
     $perGroup = New-Object System.Collections.Generic.HashSet[string]
     [void]$perGroup.Add($grp.objectSid.Value)
 
-    # 2a (optional) — recursive members. Skipped by default; this is the heavy per-group query.
+    # 2a (optional) - recursive members. Skipped by default; this is the heavy per-group query.
     if ($IncludeMembers) {
         $members = Get-ADObject -LDAPFilter "(memberOf:1.2.840.113556.1.4.1941:=$($grp.DistinguishedName))" `
                                 -Properties objectClass, sAMAccountName, objectSid @adParams
@@ -312,7 +312,7 @@ foreach ($grp in $sensitiveGroups) {
     }
     $groupMemberSids[$grp.DistinguishedName] = $perGroup
 
-    # 2b — recursive parents (which groups this sensitive group is nested inside). Group-level only.
+    # 2b - recursive parents (which groups this sensitive group is nested inside). Group-level only.
     $parents = Get-ADGroup -LDAPFilter "(member:1.2.840.113556.1.4.1941:=$($grp.DistinguishedName))" `
                            -Properties name @adParams
     foreach ($par in $parents) {
@@ -329,7 +329,7 @@ $memNote = if ($IncludeMembers) { "Effective members: $($memberRows.Count) | " }
 Write-Ok "$memNote Nesting links: $($nestingRows.Count) | Sensitive groups: $($sensitiveSids.Count)  [$([math]::Round($sw.Elapsed.TotalSeconds))s]"
 
 # ----------------------------------------------------------------------------
-# 3. ACL scan — who holds the configured dangerous rights
+# 3. ACL scan - who holds the configured dangerous rights
 # ----------------------------------------------------------------------------
 $aclRows = New-Object System.Collections.Generic.List[object]
 
@@ -416,7 +416,7 @@ if (-not $SkipAcl) {
 }
 
 # ----------------------------------------------------------------------------
-# 3.5 Shadow Admins — control over a sensitive GROUP object without membership
+# 3.5 Shadow Admins - control over a sensitive GROUP object without membership
 # ----------------------------------------------------------------------------
 Write-Step "Hunting shadow admins (control over sensitive groups without membership)..."
 
