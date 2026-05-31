@@ -72,6 +72,16 @@ if (-not (Test-Path $ConfigPath)) {
       "966707d0-3269-4727-9be2-8c3a10f19b9d": "Password Administrator"
     }
   },
+  "discovery": {
+    "byName": true,
+    "byAdminCount": true,
+    "byNestedInSeeds": true,
+    "seedPrivilegedGroups": [
+      "Domain Admins", "Enterprise Admins", "Schema Admins", "Administrators",
+      "Account Operators", "Backup Operators", "Server Operators", "Print Operators",
+      "DnsAdmins", "Group Policy Creator Owners", "Key Admins", "Enterprise Key Admins"
+    ]
+  },
   "groupNamePatterns": [
     "Domain Admins", "Enterprise Admins", "Schema Admins", "Administrators",
     "Account Operators", "Backup Operators", "Server Operators", "Print Operators",
@@ -79,7 +89,7 @@ if (-not (Test-Path $ConfigPath)) {
     "Key Admins", "Enterprise Key Admins",
     "Tier0*", "T0-*", "*-DA", "*-Tier0", "*PrivAccess*", "*PAW*"
   ],
-  "_groupNamePatterns_note": "Tight by default to avoid matching thousands. Add broad wildcards like '*admin*' only if you use an admin naming convention.",
+  "_groupNamePatterns_note": "Name patterns are just ONE discovery source. adminCount=1 and nesting-in-seeds catch org-specific names automatically. Add broad wildcards like '*admin*' only if you use an admin naming convention.",
   "sensitiveRights": [
     { "name": "Reset Password", "type": "ExtendedRight", "guid": "00299570-246d-11d0-a768-00aa006e0529" },
     { "name": "Change Password", "type": "ExtendedRight", "guid": "ab721a53-1e2f-11d0-9819-00aa0040529b" },
@@ -158,28 +168,74 @@ Write-Step "Server : $server"
 Write-Step "Base   : $searchBase"
 
 # ----------------------------------------------------------------------------
-# 1. Find sensitive groups by name pattern
+# 1. Discover sensitive groups — by privilege, not just by name
 # ----------------------------------------------------------------------------
-Write-Step "Matching groups against $($cfg.groupNamePatterns.Count) name pattern(s)..."
+# Discovery config (defensive defaults if section absent)
+$disc        = if ($cfg.PSObject.Properties.Name -contains 'discovery') { $cfg.discovery } else { $null }
+$byName      = if ($disc -and $null -ne $disc.byName)            { [bool]$disc.byName }            else { $true }
+$byAdminCnt  = if ($disc -and $null -ne $disc.byAdminCount)      { [bool]$disc.byAdminCount }      else { $true }
+$byNested    = if ($disc -and $null -ne $disc.byNestedInSeeds)   { [bool]$disc.byNestedInSeeds }   else { $true }
+$seedNames   = if ($disc -and $disc.seedPrivilegedGroups)        { @($disc.seedPrivilegedGroups) } else {
+    @('Domain Admins','Enterprise Admins','Schema Admins','Administrators','Account Operators',
+      'Backup Operators','Server Operators','Print Operators','DnsAdmins','Group Policy Creator Owners',
+      'Key Admins','Enterprise Key Admins') }
 
-$allGroups = Get-ADGroup -Filter * -SearchBase $searchBase -Properties member, memberOf, sAMAccountName, objectSid @adParams
-$patterns  = $cfg.groupNamePatterns
+Write-Step "Discovering sensitive groups (name + adminCount + nesting)..."
+$allGroups = Get-ADGroup -Filter * -SearchBase $searchBase -Properties member, memberOf, sAMAccountName, objectSid, adminCount @adParams
+$groupByDN = @{}
+foreach ($g in $allGroups) { $groupByDN[$g.DistinguishedName] = $g }
 
-$sensitiveGroups = foreach ($g in $allGroups) {
-    foreach ($p in $patterns) {
-        if ($g.Name -like $p -or $g.sAMAccountName -like $p) {
-            $g | Add-Member -NotePropertyName MatchedPattern -NotePropertyValue $p -Force
-            $g; break
+# Accumulator: DN -> group object, tagged with the reason(s) it is sensitive
+$found = @{}
+function Add-Sensitive {
+    param($g, [string]$reason)
+    if (-not $g) { return }
+    if (-not $found.ContainsKey($g.DistinguishedName)) {
+        $g | Add-Member -NotePropertyName Reasons -NotePropertyValue (New-Object System.Collections.Generic.List[string]) -Force
+        $found[$g.DistinguishedName] = $g
+    }
+    if ($found[$g.DistinguishedName].Reasons -notcontains $reason) { $found[$g.DistinguishedName].Reasons.Add($reason) }
+}
+
+# 1a. By name pattern
+if ($byName) {
+    foreach ($g in $allGroups) {
+        foreach ($p in $cfg.groupNamePatterns) {
+            if ($g.Name -like $p -or $g.sAMAccountName -like $p) { Add-Sensitive $g "name:$p"; break }
         }
     }
 }
-$sensitiveGroups = @($sensitiveGroups)
-Write-Ok "Found $($sensitiveGroups.Count) sensitive group(s)."
 
-# Per-pattern breakdown — exposes an over-broad pattern (e.g. '*admin*' matching thousands)
-$breakdown = $sensitiveGroups | Group-Object MatchedPattern | Sort-Object Count -Descending
-Write-Host "    Matched-by-pattern breakdown:" -ForegroundColor DarkGray
-$breakdown | ForEach-Object { Write-Host ("      {0,-28} {1}" -f $_.Name, $_.Count) -ForegroundColor DarkGray }
+# 1b. By adminCount=1 (AdminSDHolder/SDProp-protected — name-independent, strongest signal)
+if ($byAdminCnt) {
+    foreach ($g in $allGroups) { if ($g.adminCount -eq 1) { Add-Sensitive $g 'adminCount=1' } }
+}
+
+# 1c. By nesting inside seed privileged groups (recursive) — catches org-specific names
+if ($byNested) {
+    foreach ($seed in $seedNames) {
+        $seedGrp = $allGroups | Where-Object { $_.Name -eq $seed -or $_.sAMAccountName -eq $seed } | Select-Object -First 1
+        if (-not $seedGrp) { continue }
+        $nested = Get-ADGroup -LDAPFilter "(memberOf:1.2.840.113556.1.4.1941:=$($seedGrp.DistinguishedName))" @adParams
+        foreach ($n in $nested) {
+            $full = if ($groupByDN.ContainsKey($n.DistinguishedName)) { $groupByDN[$n.DistinguishedName] }
+                    else { Get-ADGroup -Identity $n.DistinguishedName -Properties member, memberOf, sAMAccountName, objectSid, adminCount @adParams }
+            Add-Sensitive $full "nested-in:$seed"
+        }
+    }
+}
+
+# Materialize, and set MatchedPattern = combined reasons (used by the rest of the script/reports)
+$sensitiveGroups = @($found.Values)
+foreach ($g in $sensitiveGroups) { $g | Add-Member -NotePropertyName MatchedPattern -NotePropertyValue ($g.Reasons -join '; ') -Force }
+Write-Ok "Found $($sensitiveGroups.Count) sensitive group(s)  [name=$byName adminCount=$byAdminCnt nested=$byNested]."
+
+# Breakdown by discovery reason — exposes an over-broad source (e.g. a wildcard matching thousands)
+$reasonCounts = @{}
+foreach ($g in $sensitiveGroups) { foreach ($r in $g.Reasons) { $reasonCounts[$r] = 1 + ($(if ($reasonCounts.ContainsKey($r)) { $reasonCounts[$r] } else { 0 })) } }
+Write-Host "    Discovery breakdown (groups per reason; a group can have several):" -ForegroundColor DarkGray
+$reasonCounts.GetEnumerator() | Sort-Object Value -Descending | Select-Object -First 25 |
+    ForEach-Object { Write-Host ("      {0,-34} {1}" -f $_.Key, $_.Value) -ForegroundColor DarkGray }
 
 # Safety guard: a sane sensitive-group list is tens, not thousands. Above the cap,
 # nested expansion = (matched x 2) recursive LDAP queries against the DC -> effectively hangs.
