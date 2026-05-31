@@ -196,7 +196,7 @@ function Add-Sensitive {
     if ($found[$g.DistinguishedName].Reasons -notcontains $reason) { $found[$g.DistinguishedName].Reasons.Add($reason) }
 }
 # Escape LDAP filter metacharacters. Keep '*' - it is an intended wildcard in name patterns.
-function Convert-LdapWildcard([string]$s) { $s.Replace('\','\5c').Replace('(','\28').Replace(')','\29').Replace([char]0,'\00') }
+function Convert-LdapWildcard([string]$s) { $s.Replace('\','\5c').Replace('(','\28').Replace(')','\29').Replace(([char]0).ToString(),'\00') }
 
 # 1a. By name - ONE server-side query built from all patterns (no client-side scan of 48k groups)
 if ($byName -and @($cfg.groupNamePatterns).Count -gt 0) {
